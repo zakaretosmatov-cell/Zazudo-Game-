@@ -1,6 +1,7 @@
 import React from 'react';
 import { useGame } from '../../context/GameContext';
 import { UPGRADES } from '../../utils/gameData';
+import ShopCanvas from '../GameWorld/ShopCanvas';
 
 export default function Overview({ setActiveTab }) {
   const { shop, salesLogs } = useGame();
@@ -12,6 +13,11 @@ export default function Overview({ setActiveTab }) {
 
   return (
     <div className="animate-fade-in">
+      {/* 2D Visual Shop Simulation */}
+      <div style={{ marginBottom: '2rem' }}>
+        <ShopCanvas />
+      </div>
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
         <h2 style={{ color: 'var(--text-primary)' }}>Dashboard Overview</h2>
         <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>

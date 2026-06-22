@@ -68,6 +68,7 @@ export const GameProvider = ({ children }) => {
   const [toast, setToast] = useState(null);
 
   const customerTimerRef = useRef(null);
+  const [isVisualSimulationActive, setIsVisualSimulationActive] = useState(false);
 
   // Show floating notifications helper
   const showToast = (message, type = 'info') => {
@@ -226,7 +227,7 @@ export const GameProvider = ({ children }) => {
 
   // AI Customer Ticker Loop
   useEffect(() => {
-    if (!currentUser || !shop) {
+    if (!currentUser || !shop || isVisualSimulationActive) {
       if (customerTimerRef.current) clearInterval(customerTimerRef.current);
       return;
     }
@@ -250,7 +251,7 @@ export const GameProvider = ({ children }) => {
     return () => {
       if (customerTimerRef.current) clearInterval(customerTimerRef.current);
     };
-  }, [currentUser, shop?.upgrades?.marketing, shop?.level]);
+  }, [currentUser, shop?.upgrades?.marketing, shop?.level, isVisualSimulationActive]);
 
   // Action Wrappers
   const login = async (email, password) => {
@@ -360,6 +361,19 @@ export const GameProvider = ({ children }) => {
     }
   };
 
+  const processCustomerSale = () => {
+    if (!currentUser) return null;
+    const result = dbService.tickAiCustomers(currentUser.uid);
+    if (result) {
+      triggerSound('sale');
+      if (result.leveledUp) {
+        showToast(`⚡ LEVEL UP! Your shop is now Level ${result.newLevel}!`, 'success');
+        triggerSound('upgrade');
+      }
+    }
+    return result;
+  };
+
   return (
     <GameContext.Provider value={{
       currentUser,
@@ -373,6 +387,9 @@ export const GameProvider = ({ children }) => {
       soundEnabled,
       toggleSound,
       showToast,
+      isVisualSimulationActive,
+      setIsVisualSimulationActive,
+      processCustomerSale,
       login,
       register,
       logout,
