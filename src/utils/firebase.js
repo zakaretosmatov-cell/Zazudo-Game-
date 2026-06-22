@@ -150,5 +150,15 @@ export const dbService = {
       return null;
     }
     return dbSim.tickAiCustomers(uid);
+  },
+
+  restockItem: async (uid, boxId, qty) => {
+    if (useRealFirebase) return null;
+    return dbSim.restockItem(uid, boxId, qty);
+  },
+
+  quickStockAll: async (uid) => {
+    if (useRealFirebase) return null;
+    return dbSim.quickStockAll(uid);
   }
 };

@@ -374,6 +374,26 @@ export const GameProvider = ({ children }) => {
     return result;
   };
 
+  const restockItem = async (boxId, qty) => {
+    if (!currentUser) return;
+    try {
+      await dbService.restockItem(currentUser.uid, boxId, qty);
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const quickStockAll = async () => {
+    if (!currentUser) return;
+    try {
+      await dbService.quickStockAll(currentUser.uid);
+      showToast('All delivery boxes stocked into inventory!', 'success');
+      triggerSound('success');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
   return (
     <GameContext.Provider value={{
       currentUser,
@@ -390,6 +410,8 @@ export const GameProvider = ({ children }) => {
       isVisualSimulationActive,
       setIsVisualSimulationActive,
       processCustomerSale,
+      restockItem,
+      quickStockAll,
       login,
       register,
       logout,

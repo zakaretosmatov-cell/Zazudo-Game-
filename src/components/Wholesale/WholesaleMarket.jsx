@@ -43,7 +43,7 @@ export default function WholesaleMarket() {
         <div>
           <h2 style={{ color: 'var(--text-primary)' }}>System Wholesale Supply</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '0.25rem' }}>
-            Purchase raw inventory here to stock your warehouse.
+            Purchase raw inventory here. Ordered items will be delivered as physical boxes outside your shop entrance!
           </p>
         </div>
         <div className="badge badge-common">

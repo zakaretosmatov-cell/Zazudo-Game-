@@ -1,7 +1,7 @@
 import React from 'react';
 import { useGame } from '../../context/GameContext';
 import { UPGRADES } from '../../utils/gameData';
-import ShopCanvas from '../GameWorld/ShopCanvas';
+import Shop3D from '../GameWorld/Shop3D';
 
 export default function Overview({ setActiveTab }) {
   const { shop, salesLogs } = useGame();
@@ -13,9 +13,9 @@ export default function Overview({ setActiveTab }) {
 
   return (
     <div className="animate-fade-in">
-      {/* 2D Visual Shop Simulation */}
+      {/* 3D Visual Shop Simulation */}
       <div style={{ marginBottom: '2rem' }}>
-        <ShopCanvas />
+        <Shop3D />
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>

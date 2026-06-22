@@ -145,6 +145,7 @@ export const dbSim = {
       xp: 0,
       xpToNextLevel: getXpForLevel(level),
       inventory,
+      deliveryBoxes: [],
       upgrades,
       stats: {
         totalEarnings: emailLower === 'tycoon@zazudo.io' ? 100000 : 0,
@@ -231,10 +232,11 @@ export const dbSim = {
       throw new Error('Insufficient shop balance.');
     }
 
-    // Check inventory storage limits
+    // Check inventory storage limits (including delivery boxes)
     const currentStorageLevel = shop.upgrades.storage;
     const capacity = UPGRADES.storage.getCapacity(currentStorageLevel);
-    const currentTotalQty = Object.values(shop.inventory).reduce((acc, item) => acc + item.quantity, 0);
+    const currentTotalQty = Object.values(shop.inventory).reduce((acc, item) => acc + item.quantity, 0) +
+                            (shop.deliveryBoxes || []).reduce((acc, box) => acc + box.quantity, 0);
 
     if (currentTotalQty + qty > capacity) {
       throw new Error(`Inventory capacity full. Max capacity is ${capacity}. Expand your warehouse!`);
@@ -243,10 +245,19 @@ export const dbSim = {
     // Process Transaction
     shop.balance = parseFloat((shop.balance - totalCost).toFixed(2));
     
-    if (!shop.inventory[productId]) {
-      shop.inventory[productId] = { productId, quantity: 0 };
+    if (!shop.deliveryBoxes) {
+      shop.deliveryBoxes = [];
     }
-    shop.inventory[productId].quantity += qty;
+    
+    // Spawn a delivery box
+    const boxId = 'box_' + Math.random().toString(36).substr(2, 9);
+    shop.deliveryBoxes.push({
+      id: boxId,
+      productId,
+      quantity: qty,
+      totalQuantity: qty
+    });
+
     shop.updatedAt = new Date().toISOString();
 
     shops[uid] = shop;
@@ -267,6 +278,65 @@ export const dbSim = {
     });
     saveRawData(STORAGE_KEYS.TX, transactions.slice(0, 100)); // cap logs
     
+    return shop;
+  },
+
+  restockItem: (uid, boxId, qty) => {
+    const shops = getRawData(STORAGE_KEYS.SHOPS);
+    const shop = shops[uid];
+    if (!shop) throw new Error('Shop not found.');
+
+    if (!shop.deliveryBoxes) shop.deliveryBoxes = [];
+
+    const boxIndex = shop.deliveryBoxes.findIndex(b => b.id === boxId);
+    if (boxIndex === -1) throw new Error('Delivery box not found.');
+
+    const box = shop.deliveryBoxes[boxIndex];
+    const productId = box.productId;
+
+    if (qty > box.quantity) {
+      qty = box.quantity;
+    }
+
+    // Add to inventory
+    if (!shop.inventory[productId]) {
+      shop.inventory[productId] = { productId, quantity: 0 };
+    }
+    shop.inventory[productId].quantity += qty;
+
+    // Deduct from box
+    box.quantity -= qty;
+    if (box.quantity <= 0) {
+      shop.deliveryBoxes.splice(boxIndex, 1);
+    }
+
+    shop.updatedAt = new Date().toISOString();
+    shops[uid] = shop;
+    saveRawData(STORAGE_KEYS.SHOPS, shops);
+    return shop;
+  },
+
+  quickStockAll: (uid) => {
+    const shops = getRawData(STORAGE_KEYS.SHOPS);
+    const shop = shops[uid];
+    if (!shop) throw new Error('Shop not found.');
+
+    if (!shop.deliveryBoxes || shop.deliveryBoxes.length === 0) {
+      return shop;
+    }
+
+    shop.deliveryBoxes.forEach(box => {
+      const productId = box.productId;
+      if (!shop.inventory[productId]) {
+        shop.inventory[productId] = { productId, quantity: 0 };
+      }
+      shop.inventory[productId].quantity += box.quantity;
+    });
+
+    shop.deliveryBoxes = [];
+    shop.updatedAt = new Date().toISOString();
+    shops[uid] = shop;
+    saveRawData(STORAGE_KEYS.SHOPS, shops);
     return shop;
   },
 
