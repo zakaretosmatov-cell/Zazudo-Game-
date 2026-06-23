@@ -70,6 +70,89 @@ export const GameProvider = ({ children }) => {
   const customerTimerRef = useRef(null);
   const [isVisualSimulationActive, setIsVisualSimulationActive] = useState(false);
 
+  // Supermarket Simulator HUD Stats
+  const [isStoreOpen, setIsStoreOpen] = useState(() => {
+    const saved = localStorage.getItem('zazudo_store_open');
+    return saved !== null ? JSON.parse(saved) : true;
+  });
+  const [currentDay, setCurrentDay] = useState(() => {
+    const saved = localStorage.getItem('zazudo_current_day');
+    return saved !== null ? parseInt(saved, 10) : 1;
+  });
+  const [currentTime, setCurrentTime] = useState('09:00 AM');
+  const [energy, setEnergy] = useState(() => {
+    const saved = localStorage.getItem('zazudo_energy');
+    return saved !== null ? parseInt(saved, 10) : 100;
+  });
+
+  const toggleStoreOpen = () => {
+    const newValue = !isStoreOpen;
+    setIsStoreOpen(newValue);
+    localStorage.setItem('zazudo_store_open', JSON.stringify(newValue));
+    showToast(newValue ? "Store is now OPEN!" : "Store is now CLOSED!", "info");
+    triggerSound('success');
+  };
+
+  const useEnergy = (amount) => {
+    setEnergy(prev => {
+      const next = Math.max(0, prev - amount);
+      localStorage.setItem('zazudo_energy', next.toString());
+      return next;
+    });
+  };
+
+  const recoverEnergy = (amount) => {
+    setEnergy(prev => {
+      const next = Math.min(100, prev + amount);
+      localStorage.setItem('zazudo_energy', next.toString());
+      return next;
+    });
+  };
+
+  // Time Sim ticker
+  useEffect(() => {
+    if (!isStoreOpen) return;
+    
+    let hour = 9;
+    let minute = 0;
+    let ampm = 'AM';
+
+    const interval = setInterval(() => {
+      minute += 10;
+      if (minute >= 60) {
+        minute = 0;
+        hour += 1;
+        if (hour === 12) {
+          ampm = ampm === 'AM' ? 'PM' : 'AM';
+        } else if (hour > 12) {
+          hour = 1;
+        }
+      }
+      
+      const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')} ${ampm}`;
+      setCurrentTime(timeStr);
+
+      // Roll over at 9:00 PM to next day and close store
+      if (hour === 9 && minute === 0 && ampm === 'PM') {
+        setIsStoreOpen(false);
+        localStorage.setItem('zazudo_store_open', 'false');
+        setCurrentDay(prev => {
+          const next = prev + 1;
+          localStorage.setItem('zazudo_current_day', next.toString());
+          return next;
+        });
+        showToast("Day finished! Store automatically closed. Recovered +50 Energy!", "upgrade");
+        setEnergy(prev => {
+          const next = Math.min(100, prev + 50);
+          localStorage.setItem('zazudo_energy', next.toString());
+          return next;
+        });
+      }
+    }, 4000); // 10 minutes every 4 seconds
+
+    return () => clearInterval(interval);
+  }, [isStoreOpen]);
+
   // Show floating notifications helper
   const showToast = (message, type = 'info') => {
     setToast({ message, type });
@@ -227,7 +310,7 @@ export const GameProvider = ({ children }) => {
 
   // AI Customer Ticker Loop
   useEffect(() => {
-    if (!currentUser || !shop || isVisualSimulationActive) {
+    if (!currentUser || !shop || isVisualSimulationActive || !isStoreOpen) {
       if (customerTimerRef.current) clearInterval(customerTimerRef.current);
       return;
     }
@@ -396,6 +479,13 @@ export const GameProvider = ({ children }) => {
 
   return (
     <GameContext.Provider value={{
+      isStoreOpen,
+      toggleStoreOpen,
+      currentDay,
+      currentTime,
+      energy,
+      useEnergy,
+      recoverEnergy,
       currentUser,
       shop,
       marketplaceListings,

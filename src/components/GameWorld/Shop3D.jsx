@@ -3,12 +3,31 @@ import { useGame } from '../../context/GameContext';
 import { PRODUCTS, UPGRADES } from '../../utils/gameData';
 import * as THREE from 'three';
 
+// Constant coordinates for shelves
+const SHELF_COORDS = [
+  { id: 'cyber_drink', x: -8.0, z: -4.0, color: 0xef4444, emoji: '🥤', name: 'Cyber Cola' },
+  { id: 'coffee_beans', x: -4.0, z: -4.0, color: 0x78350f, emoji: '☕', name: 'Organic Beans' },
+  { id: 'tech_gadget', x: 0.0, z: -4.0, color: 0x3b82f6, emoji: '💍', name: 'Smart Ring' },
+  { id: 'retro_console', x: 4.0, z: -4.0, color: 0x8b5cf6, emoji: '🎮', name: 'Retro Boy' },
+  { id: 'designer_shoes', x: 8.0, z: -4.0, color: 0xec4899, emoji: '👟', name: 'Aero Sneakers' },
+  { id: 'solar_charger', x: -6.0, z: 2.0, color: 0x10b981, emoji: '🎒', name: 'Solar Backpack' },
+  { id: 'ai_chip', x: -1.0, z: 2.0, color: 0x06b6d4, emoji: '🧠', name: 'Quantum Core' },
+  { id: 'luxury_watch', x: 4.0, z: 2.0, color: 0xf59e0b, emoji: '⌚', name: 'Chrono Gold' }
+];
+
 export default function Shop3D() {
   const { 
     shop, 
     processCustomerSale, 
     restockItem, 
     quickStockAll,
+    isStoreOpen,
+    toggleStoreOpen,
+    currentDay,
+    currentTime,
+    energy,
+    useEnergy,
+    recoverEnergy,
     setIsVisualSimulationActive, 
     triggerSound, 
     soundEnabled, 
@@ -17,38 +36,39 @@ export default function Shop3D() {
 
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
+  const sceneRef = useRef(null);
 
-  // React state for HUD
-  const [controlMode, setControlMode] = useState('orbit'); // orbit | firstperson
-  const [carryingBox, setCarryingBox] = useState(null); // null or { id, productId, name, quantity, totalQuantity }
-  const [activeMessage, setActiveMessage] = useState('Welcome to your 3D Supermarket!');
-  const [scanningItems, setScanningItems] = useState([]); // items currently on register scanner
+  // States
+  const [hasStarted, setHasStarted] = useState(false);
+  const [controlMode, setControlMode] = useState('firstperson'); // orbit | firstperson
+  const [carryingBox, setCarryingBox] = useState(null); // null or { id, productId, name, quantity }
+  const [activeMessage, setActiveMessage] = useState('Welcome to Zazudo Supermarket 3D!');
+  const [scanningItems, setScanningItems] = useState([]); // conveyor belt items
   const [isNearRegister, setIsNearRegister] = useState(false);
-  const [activeTheme, setActiveTheme] = useState('cyberpunk'); // cyberpunk | classic
+  const [isSprinting, setIsSprinting] = useState(false);
 
-  // Refs to share state with Three.js rendering loop
+  // Refs for loop interaction
   const stateRef = useRef({
     shopData: null,
-    controlMode: 'orbit',
+    controlMode: 'firstperson',
     carryingBox: null,
     scanningItems: [],
-    // Camera settings
+    isStoreOpen: true,
+    isSprinting: false,
     yaw: -Math.PI / 2,
     pitch: -Math.PI / 6,
     playerPos: new THREE.Vector3(0, 1.6, 5),
     keys: { w: false, a: false, s: false, d: false, e: false },
-    // Entities lists
     customers: [],
     deliveryBoxes: [],
     shelves: [],
     particles: [],
-    // Game loop parameters
     spawnTimer: 0,
-    prevTime: 0,
-    isPointerLocked: false
+    isPointerLocked: false,
+    updateNeon: null
   });
 
-  // Keep ref data synced with React state
+  // Sync data to refs
   useEffect(() => {
     stateRef.current.shopData = shop;
   }, [shop]);
@@ -61,7 +81,17 @@ export default function Shop3D() {
     stateRef.current.carryingBox = carryingBox;
   }, [carryingBox]);
 
-  // Activate visual simulation
+  useEffect(() => {
+    stateRef.current.isStoreOpen = isStoreOpen;
+    if (stateRef.current.updateNeon) {
+      stateRef.current.updateNeon(isStoreOpen);
+    }
+  }, [isStoreOpen]);
+
+  useEffect(() => {
+    stateRef.current.isSprinting = isSprinting;
+  }, [isSprinting]);
+
   useEffect(() => {
     setIsVisualSimulationActive(true);
     return () => {
@@ -69,290 +99,457 @@ export default function Shop3D() {
     };
   }, [setIsVisualSimulationActive]);
 
-  // Initialize Three.js Game World
+  // Main Three.js loader
   useEffect(() => {
+    if (!hasStarted) return;
+
     const container = containerRef.current;
     const canvas = canvasRef.current;
     if (!container || !canvas) return;
 
-    // --- THREE.JS SCENE SETUP ---
+    // SCENE & RENDERER
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(activeTheme === 'cyberpunk' ? 0x05050d : 0x0a0c10);
-    scene.fog = new THREE.FogExp2(activeTheme === 'cyberpunk' ? 0x05050d : 0x0a0c10, 0.03);
+    scene.background = new THREE.Color(0xbae6fd); // Bright sky blue
+    scene.fog = new THREE.FogExp2(0xbae6fd, 0.015);
+    sceneRef.current = scene;
 
-    // Camera
-    const camera = new THREE.PerspectiveCamera(65, container.clientWidth / container.clientHeight, 0.1, 100);
+    const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 100);
     scene.add(camera);
 
-    // Renderer
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-    // Base Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, activeTheme === 'cyberpunk' ? 0.2 : 0.4);
+    // LIGHTS
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
     scene.add(ambientLight);
 
-    // Main Overhead light
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    dirLight.position.set(5, 12, 5);
-    dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 1024;
-    dirLight.shadow.mapSize.height = 1024;
-    dirLight.shadow.camera.near = 0.5;
-    dirLight.shadow.camera.far = 25;
-    dirLight.shadow.camera.left = -10;
-    dirLight.shadow.camera.right = 10;
-    dirLight.shadow.camera.top = 10;
-    dirLight.shadow.camera.bottom = -10;
-    scene.add(dirLight);
+    const sunLight = new THREE.DirectionalLight(0xffffff, 0.7);
+    sunLight.position.set(12, 18, 12);
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.width = 1024;
+    sunLight.shadow.mapSize.height = 1024;
+    sunLight.shadow.camera.near = 0.5;
+    sunLight.shadow.camera.far = 45;
+    sunLight.shadow.camera.left = -15;
+    sunLight.shadow.camera.right = 15;
+    sunLight.shadow.camera.top = 15;
+    sunLight.shadow.camera.bottom = -15;
+    sunLight.shadow.bias = -0.0005;
+    scene.add(sunLight);
 
-    // Neon ceiling lights (glowing Cyberpunk vibe)
-    const neonPink = new THREE.PointLight(0xec4899, 1.5, 12);
-    neonPink.position.set(-4, 4, -2);
-    scene.add(neonPink);
+    // Ceiling fluorescent lights
+    const createCeilingLight = (x, z) => {
+      const group = new THREE.Group();
+      group.position.set(x, 4.8, z);
+      const bulbGeo = new THREE.CylinderGeometry(0.08, 0.08, 2.5, 8);
+      bulbGeo.rotateZ(Math.PI / 2);
+      const bulbMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+      const bulb = new THREE.Mesh(bulbGeo, bulbMat);
+      group.add(bulb);
 
-    const neonCyan = new THREE.PointLight(0x06b6d4, 1.5, 12);
-    neonCyan.position.set(4, 4, 2);
-    scene.add(neonCyan);
+      const fix = new THREE.Mesh(
+        new THREE.BoxGeometry(2.7, 0.06, 0.2),
+        new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.8 })
+      );
+      fix.position.y = 0.08;
+      group.add(fix);
 
-    // Grid Floor Helper (Custom Cyberpunk look)
-    const gridHelper = new THREE.GridHelper(30, 30, 0x3b82f6, 0x1e293b);
-    gridHelper.position.y = 0.01;
-    scene.add(gridHelper);
+      const light = new THREE.PointLight(0xffffff, 0.6, 12);
+      light.position.set(0, -0.2, 0);
+      group.add(light);
+      scene.add(group);
+    };
 
-    // Floor Mesh
-    const floorGeo = new THREE.PlaneGeometry(35, 25);
-    const floorMat = new THREE.MeshStandardMaterial({ 
-      color: activeTheme === 'cyberpunk' ? 0x0f172a : 0x1f2937, 
-      roughness: 0.8,
-      metalness: 0.1
-    });
-    const floor = new THREE.Mesh(floorGeo, floorMat);
+    createCeilingLight(-5, -5);
+    createCeilingLight(5, -5);
+    createCeilingLight(-5, 3);
+    createCeilingLight(5, 3);
+
+    // PROCEDURAL WOODEN FLOOR TEXTURE (golden orange)
+    const createWoodFloorTexture = () => {
+      const tileCanvas = document.createElement('canvas');
+      tileCanvas.width = 256;
+      tileCanvas.height = 256;
+      const ctx = tileCanvas.getContext('2d');
+      ctx.fillStyle = '#f59e0b'; // Amber base
+      ctx.fillRect(0, 0, 256, 256);
+      
+      ctx.strokeStyle = '#78350f'; // Dark line
+      ctx.lineWidth = 4;
+      
+      const plankHeight = 32;
+      for (let y = 0; y < 256; y += plankHeight) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(256, y);
+        ctx.stroke();
+        
+        const offset = (y / plankHeight) % 2 === 0 ? 64 : 0;
+        for (let x = offset; x < 256 + 64; x += 128) {
+          ctx.beginPath();
+          ctx.moveTo(x % 256, y);
+          ctx.lineTo(x % 256, y + plankHeight);
+          ctx.stroke();
+        }
+      }
+
+      ctx.fillStyle = '#d97706'; // Wood grains
+      for (let i = 0; i < 30; i++) {
+        const x = Math.random() * 256;
+        const y = Math.random() * 256;
+        const w = 40 + Math.random() * 60;
+        const h = 2;
+        ctx.fillRect(x, y, w, h);
+      }
+
+      const texture = new THREE.CanvasTexture(tileCanvas);
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.repeat.set(10, 8);
+      return texture;
+    };
+
+    // PROCEDURAL BRICK EXTERIOR TEXTURE
+    const createBrickTexture = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 128;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#b91c1c'; // Brick red
+      ctx.fillRect(0, 0, 128, 128);
+      ctx.strokeStyle = '#e2e8f0'; // cement grout
+      ctx.lineWidth = 2;
+
+      const rowHeight = 16;
+      for (let y = 0; y < 128; y += rowHeight) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(128, y);
+        ctx.stroke();
+        const offset = (y / rowHeight) % 2 === 0 ? 32 : 0;
+        for (let x = offset; x < 128 + 32; x += 64) {
+          ctx.beginPath();
+          ctx.moveTo(x % 128, y);
+          ctx.lineTo(x % 128, y + rowHeight);
+          ctx.stroke();
+        }
+      }
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.repeat.set(3, 4);
+      return texture;
+    };
+
+    // PROCEDURAL STRIPE TEXTURE
+    const createStripeTexture = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, 64, 64);
+      ctx.fillStyle = '#dc2626'; // Red stripe
+      ctx.fillRect(0, 0, 32, 64);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.repeat.set(16, 1);
+      return texture;
+    };
+
+    // PROCEDURAL BANNER TEXTURE
+    const createBannerTexture = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 128;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#16a34a'; // Green
+      ctx.fillRect(0, 0, 512, 128);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 8;
+      ctx.strokeRect(10, 10, 492, 108);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 42px "Impact", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('ZAZUDO', 256, 45);
+
+      ctx.font = 'bold 24px "Arial", sans-serif';
+      ctx.fillStyle = '#fef08a'; // Yellow
+      ctx.fillText('SUPERSTORE', 256, 92);
+
+      return new THREE.CanvasTexture(canvas);
+    };
+
+    // PROCEDURAL NEON TEXTURE
+    const createNeonTexture = (isOpen) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, 128, 64);
+      ctx.strokeStyle = isOpen ? '#22c55e' : '#ef4444';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(6, 6, 116, 52);
+
+      ctx.fillStyle = isOpen ? '#4ade80' : '#fca5a5';
+      ctx.font = 'bold 20px "Arial", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(isOpen ? 'OPEN' : 'CLOSED', 64, 32);
+      return new THREE.CanvasTexture(canvas);
+    };
+
+    // BUILD WORLD COMPONENTS
+    // 1. Floor
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(24, 20),
+      new THREE.MeshStandardMaterial({ map: createWoodFloorTexture(), roughness: 0.4 })
+    );
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
     scene.add(floor);
 
-    // Shop Room Walls
-    const wallMat = new THREE.MeshStandardMaterial({ 
-      color: activeTheme === 'cyberpunk' ? 0x1e1b4b : 0x374151,
-      roughness: 0.9 
-    });
-    
-    // Back Wall
-    const backWall = new THREE.Mesh(new THREE.BoxGeometry(26, 6, 0.5), wallMat);
-    backWall.position.set(0, 3, -10);
-    backWall.receiveShadow = true;
-    backWall.castShadow = true;
-    scene.add(backWall);
+    // 2. Sidewalk & Street Outside
+    const sidewalk = new THREE.Mesh(
+      new THREE.PlaneGeometry(35, 8),
+      new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.9 })
+    );
+    sidewalk.rotation.x = -Math.PI / 2;
+    sidewalk.position.set(0, 0.01, 14);
+    scene.add(sidewalk);
 
-    // Left Wall
-    const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, 6, 20), wallMat);
-    leftWall.position.set(-13, 3, 0);
-    leftWall.receiveShadow = true;
-    leftWall.castShadow = true;
-    scene.add(leftWall);
+    const street = new THREE.Mesh(
+      new THREE.PlaneGeometry(35, 12),
+      new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.9 })
+    );
+    street.rotation.x = -Math.PI / 2;
+    street.position.set(0, 0, 24);
+    scene.add(street);
 
-    // Right Wall
-    const rightWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, 6, 20), wallMat);
-    rightWall.position.set(13, 3, 0);
-    rightWall.receiveShadow = true;
-    rightWall.castShadow = true;
-    scene.add(rightWall);
+    // 3. Walls
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.9 });
+    const brickMat = new THREE.MeshStandardMaterial({ map: createBrickTexture(), roughness: 0.8 });
 
-    // Front Wall with Door opening
-    const frontWallLeft = new THREE.Mesh(new THREE.BoxGeometry(10, 6, 0.5), wallMat);
-    frontWallLeft.position.set(-8, 3, 10);
-    scene.add(frontWallLeft);
+    // Back & Side walls
+    const buildWall = (w, h, d, x, y, z, rotY = 0) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
+      mesh.position.set(x, y, z);
+      mesh.rotation.y = rotY;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+    };
+    buildWall(24, 5, 0.3, 0, 2.5, -10); // Back
+    buildWall(20, 5, 0.3, -12, 2.5, 0, Math.PI / 2); // Left
+    buildWall(20, 5, 0.3, 12, 2.5, 0, -Math.PI / 2); // Right
 
-    const frontWallRight = new THREE.Mesh(new THREE.BoxGeometry(10, 6, 0.5), wallMat);
-    frontWallRight.position.set(8, 3, 10);
-    scene.add(frontWallRight);
+    // Front Brick Pillars
+    const pillarLeft = new THREE.Mesh(new THREE.BoxGeometry(2.2, 5, 0.4), brickMat);
+    pillarLeft.position.set(-11, 2.5, 10);
+    scene.add(pillarLeft);
 
-    // Door glowing frame
-    const doorFrame = new THREE.Mesh(new THREE.BoxGeometry(6, 4.5, 0.6), new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
-      wireframe: true
-    }));
-    doorFrame.position.set(0, 2.25, 10);
-    scene.add(doorFrame);
+    const pillarRight = new THREE.Mesh(new THREE.BoxGeometry(2.2, 5, 0.4), brickMat);
+    pillarRight.position.set(11, 2.5, 10);
+    scene.add(pillarRight);
 
-    // Delivery Zone (Outside the door)
-    const deliveryZoneMat = new THREE.MeshBasicMaterial({ color: 0xeab308, wireframe: true });
-    const deliveryZone = new THREE.Mesh(new THREE.BoxGeometry(5, 0.1, 4), deliveryZoneMat);
-    deliveryZone.position.set(0, 0.02, 13);
-    scene.add(deliveryZone);
+    // Glass Windows
+    const windowFrameMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.9 });
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0xbae6fd, transparent: true, opacity: 0.2, roughness: 0.01 });
 
-    // --- DECORATIVE hologram (Attraction Upgrade) ---
-    let hologramGroup = new THREE.Group();
-    hologramGroup.position.set(0, 1.5, 0);
-    scene.add(hologramGroup);
+    const buildWindow = (x) => {
+      const gp = new THREE.Group();
+      gp.position.set(x, 2.5, 10);
+      const glass = new THREE.Mesh(new THREE.PlaneGeometry(3.5, 4.0), glassMat);
+      gp.add(glass);
+      const frameH = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.08, 0.1), windowFrameMat);
+      frameH.position.y = 2.0; gp.add(frameH);
+      const frameB = frameH.clone(); frameB.position.y = -2.0; gp.add(frameB);
+      const frameL = new THREE.Mesh(new THREE.BoxGeometry(0.08, 4.0, 0.1), windowFrameMat);
+      frameL.position.x = -1.8; gp.add(frameL);
+      const frameR = frameL.clone(); frameR.position.x = 1.8; gp.add(frameR);
+      scene.add(gp);
+    };
+    buildWindow(-6.5);
+    buildWindow(6.5);
 
-    const buildHologram = (level) => {
-      // Clear existing
-      while(hologramGroup.children.length > 0) {
-        hologramGroup.remove(hologramGroup.children[0]);
-      }
+    // Front Slanted Awning (Striped Tent)
+    const awning = new THREE.Mesh(
+      new THREE.BoxGeometry(20, 0.08, 2.8),
+      new THREE.MeshStandardMaterial({ map: createStripeTexture(), roughness: 0.8 })
+    );
+    awning.position.set(0, 4.1, 11.2);
+    awning.rotation.x = Math.PI / 10;
+    scene.add(awning);
 
-      if (level >= 3) {
-        const shapeGeo = new THREE.IcosahedronGeometry(0.6, 1);
-        const shapeMat = new THREE.MeshBasicMaterial({ 
-          color: activeTheme === 'cyberpunk' ? 0x06b6d4 : 0x10b981, 
-          wireframe: true, 
-          transparent: true, 
-          opacity: 0.6 
-        });
-        const holoMesh = new THREE.Mesh(shapeGeo, shapeMat);
-        hologramGroup.add(holoMesh);
+    // Giant "ZAZUDO" Welcome Banner above awning
+    const welcomeBanner = new THREE.Mesh(
+      new THREE.PlaneGeometry(13, 2.6),
+      new THREE.MeshStandardMaterial({ map: createBannerTexture(), roughness: 0.4 })
+    );
+    welcomeBanner.position.set(0, 5.1, 10.1);
+    scene.add(welcomeBanner);
 
-        // Core light
-        const holoLight = new THREE.PointLight(activeTheme === 'cyberpunk' ? 0x06b6d4 : 0x10b981, 1.0, 4);
-        holoLight.position.set(0, 0.5, 0);
-        hologramGroup.add(holoLight);
+    // Neon Open/Closed sign
+    const neonMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.2, 0.6),
+      new THREE.MeshBasicMaterial({ map: createNeonTexture(stateRef.current.isStoreOpen) })
+    );
+    neonMesh.position.set(2.4, 2.2, 10.05);
+    scene.add(neonMesh);
 
-        // Decorative floor base
-        const base = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1, 0.2, 8), new THREE.MeshStandardMaterial({ color: 0x334155 }));
-        base.position.y = -1.4;
-        hologramGroup.add(base);
-      }
+    stateRef.current.updateNeon = (isOpen) => {
+      neonMesh.material.map = createNeonTexture(isOpen);
+      neonMesh.material.needsUpdate = true;
     };
 
-    // --- CREATE 3D OBJECT MODELS ---
+    // Sliding Glass Door
+    const doorFrame = new THREE.Mesh(new THREE.BoxGeometry(4.2, 4.0, 0.2), windowFrameMat);
+    doorFrame.position.set(0, 2.0, 10);
+    scene.add(doorFrame);
 
-    // 1. Cashier Checkout Desk
+    const leftDoor = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 3.8), glassMat);
+    leftDoor.position.set(-2.0, 1.9, 10.03);
+    scene.add(leftDoor);
+
+    const rightDoor = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 3.8), glassMat);
+    rightDoor.position.set(2.0, 1.9, 10.03);
+    scene.add(rightDoor);
+
+    // Cardboard Delivery Drop Zone
+    const dropZone = new THREE.Mesh(
+      new THREE.BoxGeometry(5.0, 0.05, 3.5),
+      new THREE.MeshBasicMaterial({ color: 0xeab308, wireframe: true })
+    );
+    dropZone.position.set(0, 0.02, 14.0);
+    scene.add(dropZone);
+
+    // Checkout Counter
     const registerGroup = new THREE.Group();
-    registerGroup.position.set(8, 0, -2);
+    registerGroup.position.set(7.5, 0, 1.0);
     scene.add(registerGroup);
 
-    // Counter table
-    const counterTable = new THREE.Mesh(new THREE.BoxGeometry(2, 0.9, 3.5), new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 }));
-    counterTable.position.set(0, 0.45, 0);
-    counterTable.castShadow = true;
-    counterTable.receiveShadow = true;
-    registerGroup.add(counterTable);
+    const counter = new THREE.Mesh(
+      new THREE.BoxGeometry(1.8, 0.85, 3.0),
+      new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.3 })
+    );
+    counter.position.set(0, 0.425, 0);
+    counter.castShadow = true;
+    registerGroup.add(counter);
 
-    // Scanner red laser line
-    const scannerLaser = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.05, 0.05), new THREE.MeshBasicMaterial({ color: 0xef4444 }));
-    scannerLaser.position.set(-0.2, 0.91, 0);
-    registerGroup.add(scannerLaser);
+    const conveyor = new THREE.Mesh(
+      new THREE.BoxGeometry(0.8, 0.05, 2.2),
+      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.9 })
+    );
+    conveyor.position.set(-0.3, 0.85, 0.3);
+    registerGroup.add(conveyor);
 
-    // Computer screen
-    const pcBase = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, 0.1), new THREE.MeshStandardMaterial({ color: 0x0f172a }));
-    pcBase.position.set(0.4, 1.05, -0.4);
-    registerGroup.add(pcBase);
-    const pcScreen = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.5, 0.7), new THREE.MeshStandardMaterial({ color: 0x020617 }));
-    pcScreen.position.set(0.4, 1.35, -0.4);
-    pcScreen.rotation.y = -Math.PI / 6;
-    registerGroup.add(pcScreen);
+    const scanPlate = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.01, 0.5),
+      new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.9 })
+    );
+    scanPlate.position.set(-0.3, 0.88, -0.85);
+    registerGroup.add(scanPlate);
 
-    // Cashier character (Simple 3D dummy avatar)
-    const cashierHead = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 12), new THREE.MeshStandardMaterial({ color: 0x60a5fa }));
-    cashierHead.position.set(0, 1.45, -2);
-    registerGroup.add(cashierHead);
-    const cashierBody = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.9, 0.4), new THREE.MeshStandardMaterial({ color: 0x1d4ed8 }));
-    cashierBody.position.set(0, 0.8, -2);
-    registerGroup.add(cashierBody);
+    const laser = new THREE.Mesh(
+      new THREE.BoxGeometry(0.35, 0.02, 0.02),
+      new THREE.MeshBasicMaterial({ color: 0xef4444 })
+    );
+    laser.position.set(-0.3, 0.89, -0.85);
+    registerGroup.add(laser);
 
-    // 2. 3D Shelves (8 items slots)
-    // Shelf Layout positions
-    const SHELF_COORDS = [
-      { id: 'cyber_drink', x: -8, z: -6, color: 0xc084fc, emoji: '🥤' },
-      { id: 'coffee_beans', x: -4, z: -6, color: 0x60a5fa, emoji: '☕' },
-      { id: 'tech_gadget', x: 0, z: -6, color: 0xf43f5e, emoji: '💍' },
-      { id: 'retro_console', x: 4, z: -6, color: 0x10b981, emoji: '🎮' },
-      { id: 'designer_shoes', x: -8, z: 2, color: 0xfbbf24, emoji: '👟' },
-      { id: 'solar_charger', x: -4, z: 2, color: 0x3b82f6, emoji: '🎒' },
-      { id: 'ai_chip', x: 0, z: 2, color: 0xec4899, emoji: '🧠' },
-      { id: 'luxury_watch', x: 4, z: 2, color: 0x14b8a6, emoji: '⌚' }
-    ];
-
-    const shelf3DMeshes = {}; // keep track of shelves to update product items
-
+    // 3D SHELVES SETUP
+    const shelf3DMeshes = {};
     const buildShelves = (currentShop) => {
       SHELF_COORDS.forEach((sc) => {
-        // Remove existing shelf model if it exists
         if (shelf3DMeshes[sc.id]) {
           scene.remove(shelf3DMeshes[sc.id]);
         }
 
         const unlocked = PRODUCTS[sc.id].minLevel <= currentShop.level;
-        const shelfGroup = new THREE.Group();
-        shelfGroup.position.set(sc.x, 0, sc.z);
-        scene.add(shelfGroup);
-        shelf3DMeshes[sc.id] = shelfGroup;
+        const group = new THREE.Group();
+        group.position.set(sc.x, 0, sc.z);
+        scene.add(group);
+        shelf3DMeshes[sc.id] = group;
 
-        // Shelf Frame
-        const postLeft = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.0, 0.1), new THREE.MeshStandardMaterial({ color: 0x475569 }));
-        postLeft.position.set(-1.25, 1.0, 0);
-        postLeft.castShadow = true;
-        shelfGroup.add(postLeft);
+        // Back Panel
+        const panel = new THREE.Mesh(
+          new THREE.BoxGeometry(2.3, 2.0, 0.05),
+          new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.5 })
+        );
+        panel.position.set(0, 1.0, -0.4);
+        panel.castShadow = true;
+        group.add(panel);
 
-        const postRight = postLeft.clone();
-        postRight.position.x = 1.25;
-        shelfGroup.add(postRight);
+        // Posts
+        const postMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.7 });
+        const postL = new THREE.Mesh(new THREE.BoxGeometry(0.08, 2.1, 0.08), postMat);
+        postL.position.set(-1.15, 1.05, -0.38);
+        group.add(postL);
+        const postR = postL.clone();
+        postR.position.x = 1.15;
+        group.add(postR);
 
-        // Boards (Bottom, Middle, Top)
-        const boardMat = new THREE.MeshStandardMaterial({ color: unlocked ? 0x1e293b : 0x475569, roughness: 0.8 });
-        
-        const boardBottom = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.05, 0.9), boardMat);
-        boardBottom.position.y = 0.3;
-        boardBottom.castShadow = true;
-        boardBottom.receiveShadow = true;
-        shelfGroup.add(boardBottom);
+        // Planks
+        const plankMat = new THREE.MeshStandardMaterial({
+          color: unlocked ? 0xf8fafc : 0x94a3b8,
+          roughness: 0.6
+        });
+        const bottom = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.04, 0.75), plankMat);
+        bottom.position.set(0, 0.25, 0);
+        bottom.castShadow = true;
+        group.add(bottom);
 
-        const boardMiddle = boardBottom.clone();
-        boardMiddle.position.y = 1.0;
-        shelfGroup.add(boardMiddle);
+        const mid = bottom.clone();
+        mid.position.y = 0.9;
+        group.add(mid);
 
-        const boardTop = boardBottom.clone();
-        boardTop.position.y = 1.7;
-        shelfGroup.add(boardTop);
+        const top = bottom.clone();
+        top.position.y = 1.55;
+        group.add(top);
 
-        // Visual lock mesh if locked
-        if (!unlocked) {
-          const lockMesh = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), new THREE.MeshBasicMaterial({ color: 0xef4444 }));
-          lockMesh.position.set(0, 1.0, 0.5);
-          shelfGroup.add(lockMesh);
-        } else {
-          // Draw stocked product models
-          const stock = currentShop.inventory[sc.id];
-          const stockQty = stock ? stock.quantity : 0;
+        // Product Items rendering
+        if (unlocked) {
+          const inv = currentShop.inventory[sc.id];
+          const stockQty = inv ? inv.quantity : 0;
+          const displayCount = Math.min(stockQty, 12);
 
-          if (stockQty > 0) {
-            // Draw visual boxes on the shelves
-            // We draw 3 boxes on bottom shelf, 3 on middle shelf based on quantity
-            const totalBoxesToDraw = Math.min(8, Math.ceil(stockQty / 2));
-            const itemMat = new THREE.MeshStandardMaterial({ color: sc.color, roughness: 0.5 });
-            const itemGeo = new THREE.BoxGeometry(0.25, 0.25, 0.25);
+          for (let i = 0; i < displayCount; i++) {
+            const item = new THREE.Mesh(
+              new THREE.BoxGeometry(0.24, 0.3, 0.24),
+              new THREE.MeshStandardMaterial({ color: sc.color, roughness: 0.3 })
+            );
+            item.castShadow = true;
 
-            for (let i = 0; i < totalBoxesToDraw; i++) {
-              const item = new THREE.Mesh(itemGeo, itemMat);
-              item.castShadow = true;
+            const isBottomRow = i < 4;
+            const isMidRow = i >= 4 && i < 8;
+            const isTopRow = i >= 8;
 
-              // Distribute items across bottom (y=0.45) and middle (y=1.15) shelves
-              const isBottom = i < 4;
-              item.position.y = isBottom ? 0.45 : 1.15;
-              
-              const xIdx = i % 4;
-              item.position.x = -0.8 + xIdx * 0.5;
-              item.position.z = -0.1 + (Math.random() * 0.1); // randomize depth slightly
+            if (isBottomRow) item.position.y = 0.42;
+            else if (isMidRow) item.position.y = 1.07;
+            else item.position.y = 1.72;
 
-              shelfGroup.add(item);
-            }
+            const colIdx = i % 4;
+            item.position.x = -0.68 + colIdx * 0.45;
+            item.position.z = -0.05 + Math.random() * 0.03;
+            group.add(item);
           }
         }
       });
     };
 
-    // --- DELIVERY BOXES ENGINE ---
+    // CARDBOARD BOXES SYNCS
     const box3DMeshes = {};
-
-    const syncDeliveryBoxes = (currentShop) => {
+    const syncBoxes = (currentShop) => {
       const dbList = currentShop.deliveryBoxes || [];
       
-      // Remove boxes that are no longer in the list
+      // Remove stale boxes
       Object.keys(box3DMeshes).forEach(id => {
         if (!dbList.find(b => b.id === id)) {
           scene.remove(box3DMeshes[id]);
@@ -360,119 +557,119 @@ export default function Shop3D() {
         }
       });
 
-      // Add or update boxes
+      // Spawn boxes in exterior zone
       dbList.forEach((box, index) => {
         if (!box3DMeshes[box.id]) {
-          const boxGroup = new THREE.Group();
-          
-          // Position boxes stacked or arranged inside delivery zone outside door
-          // Delivery zone: (0, 0.02, 13). Box size: 0.8
-          const xOffset = (index % 3) * 1.2 - 1.2;
-          const zOffset = Math.floor(index / 3) * 1.2 + 13.0;
+          const group = new THREE.Group();
+          const col = index % 3;
+          const row = Math.floor(index / 3);
+          const xOffset = col * 1.3 - 1.3;
+          const zOffset = row * 1.3 + 14.0;
+          group.position.set(xOffset, 0.38, zOffset);
+          scene.add(group);
+          box3DMeshes[box.id] = group;
 
-          boxGroup.position.set(xOffset, 0.4, zOffset);
-          scene.add(boxGroup);
-          box3DMeshes[box.id] = boxGroup;
-
-          // Box Mesh
-          const boxMesh = new THREE.Mesh(
-            new THREE.BoxGeometry(0.8, 0.8, 0.8),
-            new THREE.MeshStandardMaterial({ color: 0x92400e, roughness: 0.9 }) // Cardboard brown
+          const mesh = new THREE.Mesh(
+            new THREE.BoxGeometry(0.85, 0.75, 0.85),
+            new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.9 })
           );
-          boxMesh.castShadow = true;
-          boxMesh.receiveShadow = true;
-          boxGroup.add(boxMesh);
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          group.add(mesh);
 
-          // Packing tape
           const tape = new THREE.Mesh(
-            new THREE.BoxGeometry(0.12, 0.81, 0.81),
-            new THREE.MeshBasicMaterial({ color: 0xfef08a }) // yellow tape
+            new THREE.BoxGeometry(0.15, 0.76, 0.86),
+            new THREE.MeshBasicMaterial({ color: 0xfef08a })
           );
-          boxGroup.add(tape);
+          group.add(tape);
 
-          // Add Box ID label reference to the mesh for clicking
-          boxMesh.userData = { boxId: box.id, productId: box.productId, name: PRODUCTS[box.productId].name, quantity: box.quantity };
+          mesh.userData = { boxId: box.id, productId: box.productId, name: PRODUCTS[box.productId].name, quantity: box.quantity };
         }
       });
     };
 
-    // Initial build
+    // HOLOGRAM DECORATIVE (Attraction Upgrade)
+    const hologramGroup = new THREE.Group();
+    hologramGroup.position.set(0, 1.2, 0);
+    scene.add(hologramGroup);
+
+    const buildHologram = (level) => {
+      while (hologramGroup.children.length > 0) {
+        hologramGroup.remove(hologramGroup.children[0]);
+      }
+      if (level >= 3) {
+        const ico = new THREE.Mesh(
+          new THREE.IcosahedronGeometry(0.65, 1),
+          new THREE.MeshBasicMaterial({ color: 0x06b6d4, wireframe: true, transparent: true, opacity: 0.7 })
+        );
+        hologramGroup.add(ico);
+        const pl = new THREE.PointLight(0x06b6d4, 1.5, 6);
+        hologramGroup.add(pl);
+      }
+    };
+
+    // INIT SCENE
     const initialShop = stateRef.current.shopData;
     if (initialShop) {
       buildShelves(initialShop);
-      syncDeliveryBoxes(initialShop);
+      syncBoxes(initialShop);
       buildHologram(initialShop.upgrades.attraction);
     }
 
-    // --- CONTROLS SETUP ---
-
-    // 1. Mouse Input for Orbit Cam
+    // CONTROLS MOUSE DRAGGING & WASD
     let isDragging = false;
-    let prevMouseX = 0;
-    let prevMouseY = 0;
-    let cameraRadius = 15;
-    let cameraTheta = Math.PI / 4; // azimuth
-    let cameraPhi = Math.PI / 6; // elevation
+    let prevX = 0;
+    let prevY = 0;
+    let camRadius = 14;
+    let camTheta = Math.PI / 4;
+    let camPhi = Math.PI / 5;
 
     const onMouseDown = (e) => {
       if (stateRef.current.controlMode === 'orbit') {
         isDragging = true;
-        prevMouseX = e.clientX;
-        prevMouseY = e.clientY;
+        prevX = e.clientX;
+        prevY = e.clientY;
       }
     };
 
     const onMouseMove = (e) => {
-      const currentMode = stateRef.current.controlMode;
-      
-      if (currentMode === 'orbit' && isDragging) {
-        const deltaX = e.clientX - prevMouseX;
-        const deltaY = e.clientY - prevMouseY;
-        prevMouseX = e.clientX;
-        prevMouseY = e.clientY;
-
-        cameraTheta -= deltaX * 0.005;
-        cameraPhi = Math.max(0.1, Math.min(Math.PI / 2 - 0.05, cameraPhi + deltaY * 0.005));
-      } else if (currentMode === 'firstperson' && stateRef.current.isPointerLocked) {
-        const movementX = e.movementX || 0;
-        const movementY = e.movementY || 0;
-
-        stateRef.current.yaw += movementX * 0.0025;
-        stateRef.current.pitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, stateRef.current.pitch - movementY * 0.0025));
+      const mode = stateRef.current.controlMode;
+      if (mode === 'orbit' && isDragging) {
+        const dx = e.clientX - prevX;
+        const dy = e.clientY - prevY;
+        prevX = e.clientX;
+        prevY = e.clientY;
+        camTheta -= dx * 0.005;
+        camPhi = Math.max(0.1, Math.min(Math.PI / 2 - 0.05, camPhi + dy * 0.005));
+      } else if (mode === 'firstperson' && stateRef.current.isPointerLocked) {
+        const mx = e.movementX || 0;
+        const my = e.movementY || 0;
+        stateRef.current.yaw += mx * 0.0025;
+        stateRef.current.pitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, stateRef.current.pitch - my * 0.0025));
       }
     };
 
-    const onMouseUp = () => {
-      isDragging = false;
-    };
-
+    const onMouseUp = () => { isDragging = false; };
     const onWheel = (e) => {
       if (stateRef.current.controlMode === 'orbit') {
-        cameraRadius = Math.max(5, Math.min(25, cameraRadius + e.deltaY * 0.01));
+        camRadius = Math.max(4, Math.min(22, camRadius + e.deltaY * 0.015));
       }
     };
 
-    // 2. Keyboard Input for FP Cam
     const onKeyDown = (e) => {
-      const key = e.key.toLowerCase();
-      if (['w', 'a', 's', 'd', 'e'].includes(key)) {
-        stateRef.current.keys[key] = true;
-      }
-      
-      // Stock placement trigger in 3D
-      if (key === 'e' && stateRef.current.carryingBox) {
-        attemptStockItem();
+      const k = e.key.toLowerCase();
+      if (['w', 'a', 's', 'd', 'e'].includes(k)) {
+        stateRef.current.keys[k] = true;
       }
     };
 
     const onKeyUp = (e) => {
-      const key = e.key.toLowerCase();
-      if (['w', 'a', 's', 'd', 'e'].includes(key)) {
-        stateRef.current.keys[key] = false;
+      const k = e.key.toLowerCase();
+      if (['w', 'a', 's', 'd', 'e'].includes(k)) {
+        stateRef.current.keys[k] = false;
       }
     };
 
-    // Attach listeners
     window.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
@@ -480,42 +677,33 @@ export default function Shop3D() {
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
 
-    // Click on canvas (Pointer lock trigger or object clicking)
     const onCanvasClick = (e) => {
-      const currentMode = stateRef.current.controlMode;
-      const currentShop = stateRef.current.shopData;
-      if (!currentShop) return;
-
-      if (currentMode === 'firstperson') {
+      const mode = stateRef.current.controlMode;
+      if (mode === 'firstperson') {
         if (!stateRef.current.isPointerLocked) {
           canvas.requestPointerLock();
         } else {
-          // Perform raycast clicking in First-Person Mode
-          raycastInteraction(e);
+          raycast(e);
         }
       } else {
-        // Orbit Mode: Click to interact
-        raycastInteraction(e);
+        raycast(e);
       }
     };
-
     canvas.addEventListener('click', onCanvasClick);
 
-    // Pointer Lock events
     const onPointerLockChange = () => {
       stateRef.current.isPointerLocked = (document.pointerLockElement === canvas);
     };
     document.addEventListener('pointerlockchange', onPointerLockChange);
 
-    // Raycast click collision detector
+    // CLICK RAYCAST INTERACTION
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
-    const raycastInteraction = (e) => {
-      const currentShop = stateRef.current.shopData;
-      if (!currentShop) return;
+    const raycast = (e) => {
+      const shopData = stateRef.current.shopData;
+      if (!shopData) return;
 
-      // Calculate mouse coordinates: in PointerLock, it's always center of screen
       if (stateRef.current.isPointerLocked) {
         mouse.set(0, 0);
       } else {
@@ -525,31 +713,24 @@ export default function Shop3D() {
       }
 
       raycaster.setFromCamera(mouse, camera);
-
-      // Collect all clickable meshes
       const intersects = raycaster.intersectObjects(scene.children, true);
       if (intersects.length === 0) return;
 
-      // Find if we clicked a delivery box
       let clickedBox = null;
-      let clickedRegister = false;
+      let clickedReg = false;
       let clickedShelf = null;
 
       for (let i = 0; i < intersects.length; i++) {
-        const obj = intersects[i].object;
-        
-        // Check if parent group or user data has boxId
-        let curr = obj;
+        let curr = intersects[i].object;
         while (curr) {
           if (curr.userData && curr.userData.boxId) {
             clickedBox = curr.userData;
             break;
           }
           if (curr === registerGroup) {
-            clickedRegister = true;
+            clickedReg = true;
             break;
           }
-          // Check if shelf
           const shelfId = Object.keys(shelf3DMeshes).find(id => shelf3DMeshes[id] === curr);
           if (shelfId) {
             clickedShelf = shelfId;
@@ -557,29 +738,24 @@ export default function Shop3D() {
           }
           curr = curr.parent;
         }
-        if (clickedBox || clickedRegister || clickedShelf) break;
+        if (clickedBox || clickedReg || clickedShelf) break;
       }
 
-      // Proximity check in First Person Mode (must be within 4 units to interact)
-      const playerPos = stateRef.current.playerPos;
+      // Check distance in First Person mode
       if (stateRef.current.controlMode === 'firstperson') {
-        const hitPos = intersects[0].point;
-        const dist = playerPos.distanceTo(hitPos);
-        if (dist > 4.5) {
-          setActiveMessage('⚠️ Too far away! Move closer to interact.');
-          setTimeout(() => setActiveMessage(''), 2500);
+        const hit = intersects[0].point;
+        if (stateRef.current.playerPos.distanceTo(hit) > 4.5) {
+          setActiveMessage('⚠️ Move closer to interact!');
+          setTimeout(() => setActiveMessage(''), 2000);
           return;
         }
       }
 
-      // Process interactions
       if (clickedBox) {
-        // Pick up box
         if (stateRef.current.carryingBox) {
-          setActiveMessage('⚠️ Already carrying a box! Drop or stock it first.');
+          setActiveMessage('⚠️ Already carrying a box!');
         } else {
-          // Add to carrying
-          const box = (currentShop.deliveryBoxes || []).find(b => b.id === clickedBox.boxId);
+          const box = (shopData.deliveryBoxes || []).find(b => b.id === clickedBox.boxId);
           if (box) {
             setCarryingBox({ ...box, name: PRODUCTS[box.productId].name });
             setActiveMessage(`📦 Carrying Box: ${PRODUCTS[box.productId].name} (${box.quantity}x)`);
@@ -587,327 +763,216 @@ export default function Shop3D() {
           }
         }
       } else if (clickedShelf && stateRef.current.carryingBox) {
-        // Stock carrying item on shelf
-        attemptStockItemOnShelf(clickedShelf);
-      } else if (clickedRegister) {
-        // Enter Cashier Scan HUD mode
+        attemptStockShelf(clickedShelf);
+      } else if (clickedReg) {
         setIsNearRegister(true);
-        if (stateRef.current.controlMode === 'firstperson' && stateRef.current.isPointerLocked) {
+        if (stateRef.current.isPointerLocked) {
           document.exitPointerLock();
         }
       }
     };
 
-    // Attempts to stock item based on carrying box in First-Person (near nearest shelf)
-    const attemptStockItem = () => {
+    const attemptStockShelf = (shelfId) => {
       const box = stateRef.current.carryingBox;
       if (!box) return;
 
-      // Find nearest shelf to player
-      const playerPos = stateRef.current.playerPos;
-      let nearestShelfId = null;
-      let minDist = 3.5; // interact radius
-
-      SHELF_COORDS.forEach(sc => {
-        const shelfPos = new THREE.Vector3(sc.x, 1, sc.z);
-        const dist = playerPos.distanceTo(shelfPos);
-        if (dist < minDist) {
-          minDist = dist;
-          nearestShelfId = sc.id;
-        }
-      });
-
-      if (nearestShelfId) {
-        attemptStockItemOnShelf(nearestShelfId);
-      }
-    };
-
-    const attemptStockItemOnShelf = (shelfProductId) => {
-      const box = stateRef.current.carryingBox;
-      const currentShop = stateRef.current.shopData;
-      if (!box || !currentShop) return;
-
-      if (box.productId !== shelfProductId) {
-        setActiveMessage(`❌ This shelf is for ${PRODUCTS[shelfProductId].name}, not ${box.name}!`);
+      if (box.productId !== shelfId) {
+        setActiveMessage(`❌ This shelf only holds ${PRODUCTS[shelfId].name}!`);
         triggerSound('error');
-        setTimeout(() => setActiveMessage(''), 3000);
+        setTimeout(() => setActiveMessage(''), 2000);
         return;
       }
 
-      // Perform restock unit!
       restockItem(box.id, 1);
       triggerSound('success');
-      
-      // Update local carrying state
-      const updatedBox = { ...box, quantity: box.quantity - 1 };
-      if (updatedBox.quantity <= 0) {
+      useEnergy(3); // Drains energy
+
+      const nextBox = { ...box, quantity: box.quantity - 1 };
+      if (nextBox.quantity <= 0) {
         setCarryingBox(null);
-        setActiveMessage('📦 Box emptied and discarded.');
+        setActiveMessage('📦 Box emptied.');
       } else {
-        setCarryingBox(updatedBox);
-        setActiveMessage(`📦 Carrying Box: ${box.name} (${updatedBox.quantity}x)`);
+        setCarryingBox(nextBox);
+        setActiveMessage(`📦 Carrying: ${box.name} (${nextBox.quantity}x)`);
       }
     };
 
-    // --- NPC CUSTOMERS ENGINE ---
-    // Spawn 3D customers
-    const namesList = ['Zara', 'Kael', 'Rin', 'V', 'Dexter', 'Lina', 'Sora', 'Tifa', 'Cloud', 'Ken', 'Yuki'];
-    const bodyColors = [0xf472b6, 0x38bdf8, 0x4ade80, 0xfbbf24, 0xa78bfa, 0x2dd4bf, 0xfb7185, 0xa3e635];
+    // NPC CUSTOMERS SPANNING
+    const names = ['Zara', 'Kael', 'Rin', 'V', 'Dexter', 'Lina', 'Sora', 'Tifa', 'Cloud', 'Ken', 'Yuki', 'Mia'];
+    const colors = [0xf472b6, 0x38bdf8, 0x4ade80, 0xfbbf24, 0xa78bfa, 0x2dd4bf, 0xfb7185, 0xf97316];
 
-    const spawn3DCustomer = () => {
+    const spawnCustomer = () => {
       const currentShop = stateRef.current.shopData;
-      if (!currentShop) return;
+      if (!currentShop || !stateRef.current.isStoreOpen) return;
 
-      // Choose target product
-      const inStockProducts = Object.keys(currentShop.inventory).filter(
-        id => currentShop.inventory[id].quantity > 0
-      );
-      
-      let targetProduct = 'cyber_drink';
-      if (inStockProducts.length > 0 && Math.random() < 0.85) {
-        targetProduct = inStockProducts[Math.floor(Math.random() * inStockProducts.length)];
-      } else {
-        const unlockedProducts = Object.keys(PRODUCTS).filter(
-          id => PRODUCTS[id].minLevel <= currentShop.level
-        );
-        if (unlockedProducts.length > 0) {
-          targetProduct = unlockedProducts[Math.floor(Math.random() * unlockedProducts.length)];
-        }
+      const itemsInStock = Object.keys(currentShop.inventory).filter(id => currentShop.inventory[id].quantity > 0);
+      let targetProd = 'cyber_drink';
+      if (itemsInStock.length > 0) {
+        targetProd = itemsInStock[Math.floor(Math.random() * itemsInStock.length)];
       }
 
-      const shelfCoord = SHELF_COORDS.find(sc => sc.id === targetProduct) || SHELF_COORDS[0];
+      const shelfCoord = SHELF_COORDS.find(sc => sc.id === targetProd) || SHELF_COORDS[0];
 
-      // Build 3D mesh for customer
-      const custGroup = new THREE.Group();
-      custGroup.position.set(0, 0.5, 10.5); // Spawn outside door
-      scene.add(custGroup);
+      // Custom Blocky Customer body
+      const group = new THREE.Group();
+      group.position.set(0, 0.45, 10.5);
+      scene.add(group);
 
-      const color = bodyColors[Math.floor(Math.random() * bodyColors.length)];
-      const bodyMesh = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.8, 0.4), new THREE.MeshStandardMaterial({ color, roughness: 0.6 }));
-      bodyMesh.castShadow = true;
-      custGroup.add(bodyMesh);
+      const color = colors[Math.floor(Math.random() * colors.length)];
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.75, 0.35), new THREE.MeshStandardMaterial({ color, roughness: 0.6 }));
+      body.castShadow = true;
+      group.add(body);
 
-      const headMesh = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.35, 0.35), new THREE.MeshStandardMaterial({ color: 0xffe4e6 }));
-      headMesh.position.y = 0.55;
-      headMesh.castShadow = true;
-      custGroup.add(headMesh);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.35, 0.35), new THREE.MeshStandardMaterial({ color: 0xffd1b3 }));
+      head.position.y = 0.52;
+      group.add(head);
 
-      const hairMesh = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.15, 0.38), new THREE.MeshStandardMaterial({ color: 0x1e293b }));
-      hairMesh.position.y = 0.72;
-      custGroup.add(hairMesh);
-
-      const newCustomer = {
-        mesh: custGroup,
+      const customer = {
+        mesh: group,
         color,
-        productId: targetProduct,
-        shelfPos: new THREE.Vector3(shelfCoord.x, 0.5, shelfCoord.z + 1.2), // stand in front of shelf
-        state: 'entering', // entering | browsing | checkout | leaving
+        productId: targetProd,
+        shelfPos: new THREE.Vector3(shelfCoord.x, 0.45, shelfCoord.z + 1.1),
+        state: 'entering',
         pauseTimer: 0,
-        speed: 1.2 + Math.random() * 0.5,
+        speed: 1.4 + Math.random() * 0.4,
         bobAngle: Math.random() * 10,
-        bobSpeed: 0.15 + Math.random() * 0.05,
+        bobSpeed: 0.16,
         hasItem: false,
-        name: namesList[Math.floor(Math.random() * namesList.length)]
+        name: names[Math.floor(Math.random() * names.length)]
       };
-
-      stateRef.current.customers.push(newCustomer);
+      stateRef.current.customers.push(customer);
     };
 
-    // Clean particles list
-    const create3DParticle = (pos, text, colorCode) => {
-      const canvasText = document.createElement('canvas');
-      canvasText.width = 128;
-      canvasText.height = 64;
-      const tCtx = canvasText.getContext('2d');
-      tCtx.fillStyle = colorCode === 0x4ade80 ? '#4ade80' : '#60a5fa';
-      tCtx.font = 'bold 20px Arial';
-      tCtx.fillText(text, 10, 40);
+    const cashierTrigger = (cust) => {
+      const info = PRODUCTS[cust.productId];
+      const qty = Math.floor(Math.random() * 2) + 1;
 
-      const textTex = new THREE.CanvasTexture(canvasText);
-      const spriteMat = new THREE.SpriteMaterial({ map: textTex, transparent: true });
-      const sprite = new THREE.Sprite(spriteMat);
-      sprite.position.copy(pos);
-      sprite.scale.set(1.5, 0.75, 1);
-      scene.add(sprite);
-
-      stateRef.current.particles.push({
-        sprite,
-        vy: 0.02,
-        life: 60
-      });
-    };
-
-    // Sync cashier register belt state to UI list when customer is checked out
-    const cashierCheckOutTrigger = (cust) => {
-      const productInfo = PRODUCTS[cust.productId];
-      const quantity = Math.floor(Math.random() * 2) + 1; // 1-2 items
-
-      // Create a visual 3D item on conveyor belt
       const itemMesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.2, 0.2, 0.2),
-        new THREE.MeshStandardMaterial({ color: 0xef4444 })
+        new THREE.BoxGeometry(0.22, 0.22, 0.22),
+        new THREE.MeshStandardMaterial({ color: 0xeab308 })
       );
-      itemMesh.position.set(8.0 - 0.2, 0.95, -2.0 + (stateRef.current.scanningItems.length * 0.35));
+      itemMesh.position.set(7.2, 0.90, 1.0 + (stateRef.current.scanningItems.length * 0.35));
       scene.add(itemMesh);
 
-      // Add to cashier UI scanning items list
-      const updatedScanningList = [...stateRef.current.scanningItems, {
+      const list = [...stateRef.current.scanningItems, {
         mesh: itemMesh,
         productId: cust.productId,
-        name: productInfo.name,
-        quantity,
-        emoji: productInfo.emoji
+        name: info.name,
+        quantity: qty,
+        emoji: info.emoji
       }];
-
-      stateRef.current.scanningItems = updatedScanningList;
-      setScanningItems(updatedScanningList);
+      stateRef.current.scanningItems = list;
+      setScanningItems(list);
     };
 
-    // --- RENDER GAME LOOP ---
+    // RENDER ANIMATION LOOP
     const clock = new THREE.Clock();
-
     const animate = () => {
       const delta = clock.getDelta();
-      const timestamp = clock.getElapsedTime() * 1000;
-
       const currentShop = stateRef.current.shopData;
       if (!currentShop) {
         requestAnimationFrame(animate);
         return;
       }
 
-      // 1. Spawning customers
-      const marketingLevel = currentShop.upgrades.marketing;
-      const spawnInterval = Math.max(3000, 16000 - (marketingLevel - 1) * 2200);
-      
-      stateRef.current.spawnTimer += delta * 1000;
-      if (stateRef.current.spawnTimer >= spawnInterval) {
-        stateRef.current.spawnTimer = 0;
-        if (stateRef.current.customers.length < 5) {
-          spawn3DCustomer();
+      // Spawn customer loop (if open)
+      if (stateRef.current.isStoreOpen) {
+        const lvl = currentShop.upgrades.marketing;
+        const interval = Math.max(3000, 15000 - (lvl - 1) * 2000);
+        stateRef.current.spawnTimer += delta * 1000;
+        if (stateRef.current.spawnTimer >= interval) {
+          stateRef.current.spawnTimer = 0;
+          if (stateRef.current.customers.length < 5) {
+            spawnCustomer();
+          }
         }
       }
 
-      // Rebuild shelves and boxes on changes
+      // Rebuild shelves and sync box lists
       buildShelves(currentShop);
-      syncDeliveryBoxes(currentShop);
+      syncBoxes(currentShop);
       buildHologram(currentShop.upgrades.attraction);
 
-      // Rotate hologram core
-      hologramGroup.rotation.y += 0.015;
-      hologramGroup.rotation.z += 0.005;
+      hologramGroup.rotation.y += 0.02;
 
-      // 2. Camera control logic
-      const currentMode = stateRef.current.controlMode;
-      if (currentMode === 'orbit') {
-        const target = new THREE.Vector3(0, 1, 0);
-        camera.position.x = target.x + cameraRadius * Math.sin(cameraTheta) * Math.cos(cameraPhi);
-        camera.position.y = target.y + cameraRadius * Math.sin(cameraPhi);
-        camera.position.z = target.z + cameraRadius * Math.cos(cameraTheta) * Math.cos(cameraPhi);
+      // Camera Movements
+      const mode = stateRef.current.controlMode;
+      if (mode === 'orbit') {
+        const target = new THREE.Vector3(0, 0.5, 0);
+        camera.position.x = target.x + camRadius * Math.sin(camTheta) * Math.cos(camPhi);
+        camera.position.y = target.y + camRadius * Math.sin(camPhi);
+        camera.position.z = target.z + camRadius * Math.cos(camTheta) * Math.cos(camPhi);
         camera.lookAt(target);
       } else {
-        // First Person movement logic
-        const playerPos = stateRef.current.playerPos;
+        const pos = stateRef.current.playerPos;
         const keys = stateRef.current.keys;
-        const speed = 4.0 * delta;
+        const moveSpeed = (stateRef.current.isSprinting ? 6.5 : 3.8) * delta;
 
-        // Calculate direction vectors
         const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), stateRef.current.yaw);
         const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), stateRef.current.yaw);
 
-        // Move
-        if (keys.w) playerPos.addScaledVector(forward, speed);
-        if (keys.s) playerPos.addScaledVector(forward, -speed);
-        if (keys.a) playerPos.addScaledVector(right, -speed);
-        if (keys.d) playerPos.addScaledVector(right, speed);
+        if (keys.w) pos.addScaledVector(forward, moveSpeed);
+        if (keys.s) pos.addScaledVector(forward, -moveSpeed);
+        if (keys.a) pos.addScaledVector(right, -moveSpeed);
+        if (keys.d) pos.addScaledVector(right, moveSpeed);
 
-        // Wall Boundaries Collision Detection
-        playerPos.x = Math.max(-12, Math.min(12, playerPos.x));
-        playerPos.z = Math.max(-9.5, Math.min(12.5, playerPos.z)); // allow stepping out to delivery zone
+        // Keep inside boundary walls
+        pos.x = Math.max(-11.0, Math.min(11.0, pos.x));
+        pos.z = Math.max(-9.0, Math.min(13.0, pos.z));
 
-        // Set camera
-        camera.position.copy(playerPos);
-        
-        const targetLook = new THREE.Vector3(0, 0, -1);
-        targetLook.applyAxisAngle(new THREE.Vector3(1, 0, 0), stateRef.current.pitch);
-        targetLook.applyAxisAngle(new THREE.Vector3(0, 1, 0), stateRef.current.yaw);
-        targetLook.add(playerPos);
-        camera.lookAt(targetLook);
+        camera.position.copy(pos);
+        const look = new THREE.Vector3(0, 0, -1);
+        look.applyAxisAngle(new THREE.Vector3(1, 0, 0), stateRef.current.pitch);
+        look.applyAxisAngle(new THREE.Vector3(0, 1, 0), stateRef.current.yaw);
+        look.add(pos);
+        camera.lookAt(look);
       }
 
-      // 3. Customers animation & behavior pathfinding
+      // Customer paths
       stateRef.current.customers.forEach((cust, idx) => {
         cust.bobAngle += cust.bobSpeed;
-        cust.mesh.position.y = 0.5 + Math.abs(Math.sin(cust.bobAngle)) * 0.15; // walking bob
+        cust.mesh.position.y = 0.45 + Math.abs(Math.sin(cust.bobAngle)) * 0.1;
 
-        let target = new THREE.Vector3(0, 0.5, 9); // default center path
+        let target = new THREE.Vector3(0, 0.45, 9);
         if (cust.state === 'entering') {
-          target.set(0, 0.5, 5);
-          const dist = cust.mesh.position.distanceTo(target);
-          if (dist < 0.5) {
+          target.set(0, 0.45, 5);
+          if (cust.mesh.position.distanceTo(target) < 0.5) {
             cust.state = 'browsing';
           }
         } else if (cust.state === 'browsing') {
           target.copy(cust.shelfPos);
-          const dist = cust.mesh.position.distanceTo(target);
-          if (dist < 0.3) {
+          if (cust.mesh.position.distanceTo(target) < 0.4) {
             if (cust.pauseTimer === 0) {
-              cust.pauseTimer = 90; // browse for 1.5s
-              
-              // Check stock
+              cust.pauseTimer = 90;
               const stock = currentShop.inventory[cust.productId];
               cust.hasItem = stock && stock.quantity > 0;
             } else {
               cust.pauseTimer--;
               if (cust.pauseTimer <= 0) {
-                if (cust.hasItem) {
-                  cust.state = 'checkout';
-                } else {
-                  cust.state = 'leaving';
-                }
+                cust.state = cust.hasItem ? 'checkout' : 'leaving';
               }
             }
           }
         } else if (cust.state === 'checkout') {
-          // Walk to checkout register line queue
-          target.set(8.0, 0.5, 0); // front of desk
-          const dist = cust.mesh.position.distanceTo(target);
-          if (dist < 0.5) {
-            // Arrived at register! Place items on conveyor belt
-            cashierCheckOutTrigger(cust);
+          target.set(7.0, 0.45, 1.8);
+          if (cust.mesh.position.distanceTo(target) < 0.5) {
+            cashierTrigger(cust);
             cust.state = 'leaving';
-            cust.pauseTimer = 40; // checkout buffer
           }
         } else if (cust.state === 'leaving') {
-          target.set(0, 0.5, 11); // Door exit
-          const dist = cust.mesh.position.distanceTo(target);
-          if (dist < 0.5) {
+          target.set(0, 0.45, 11);
+          if (cust.mesh.position.distanceTo(target) < 0.5) {
             scene.remove(cust.mesh);
             stateRef.current.customers.splice(idx, 1);
           }
         }
 
-        // Walk translation
         const dir = new THREE.Vector3().subVectors(target, cust.mesh.position);
-        dir.y = 0; // lock height
-        const len = dir.length();
-        if (len > 0.1) {
+        dir.y = 0;
+        if (dir.length() > 0.1) {
           dir.normalize();
           cust.mesh.position.addScaledVector(dir, cust.speed * delta);
-          
-          // Face walking direction
-          const angle = Math.atan2(dir.x, dir.z);
-          cust.mesh.rotation.y = angle;
-        }
-      });
-
-      // 4. Update floating particles
-      stateRef.current.particles.forEach((p, idx) => {
-        p.sprite.position.y += p.vy;
-        p.life--;
-        if (p.life <= 0) {
-          scene.remove(p.sprite);
-          stateRef.current.particles.splice(idx, 1);
+          cust.mesh.rotation.y = Math.atan2(dir.x, dir.z);
         }
       });
 
@@ -917,7 +982,7 @@ export default function Shop3D() {
 
     requestAnimationFrame(animate);
 
-    // Clean listeners on cleanup
+    // CLEANUP
     return () => {
       window.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('mousemove', onMouseMove);
@@ -927,59 +992,46 @@ export default function Shop3D() {
       window.removeEventListener('keyup', onKeyUp);
       canvas.removeEventListener('click', onCanvasClick);
       document.removeEventListener('pointerlockchange', onPointerLockChange);
-      
-      // Clean scene meshes
       scene.clear();
       renderer.dispose();
     };
-  }, [activeTheme, activeTheme]);
+  }, [hasStarted, controlMode]);
 
-  // Click on scanning item to manually scan it
+  const handleManualDropBox = () => {
+    if (!carryingBox) return;
+    setCarryingBox(null);
+    setActiveMessage('📦 Box dropped.');
+    triggerSound('success');
+  };
+
+  const handleManualStock = () => {
+    if (!carryingBox) return;
+    const box = carryingBox;
+    restockItem(box.id, 1);
+    useEnergy(4);
+    triggerSound('success');
+
+    const nextBox = { ...box, quantity: box.quantity - 1 };
+    if (nextBox.quantity <= 0) {
+      setCarryingBox(null);
+      setActiveMessage('📦 Box emptied.');
+    } else {
+      setCarryingBox(nextBox);
+      setActiveMessage(`📦 Carrying: ${box.name} (${nextBox.quantity}x)`);
+    }
+  };
+
   const scanConveyorItem = (index) => {
     const list = [...scanningItems];
     const item = list[index];
     if (!item) return;
 
-    // Scan Beep sound
     triggerSound('sale');
-
-    // Create glowing "+$xx" particle in 3D scene above checkout counter
-    const registerWorldPos = new THREE.Vector3(8.0, 1.2, -1.0);
-    // Find item cost
-    const pInfo = PRODUCTS[item.productId];
-    const attractionLevel = shop.upgrades.attraction;
-    const maxMarkup = UPGRADES.attraction.getMaxPriceMarkup(attractionLevel);
-    const markupBonus = 1 + (Math.random() * (maxMarkup - 1.0));
-    const salePrice = Math.round(pInfo.baseSellPrice * markupBonus);
-
-    // Call processCustomerSale backend
     const result = processCustomerSale();
 
-    // Trigger visual particles
     if (result) {
-      // Success
-      // Remove 3D conveyor item box mesh
-      scene.remove(item.mesh);
-
-      // Create floating particles
-      const textCanvas = document.createElement('canvas');
-      textCanvas.width = 128;
-      textCanvas.height = 64;
-      const tCtx = textCanvas.getContext('2d');
-      tCtx.fillStyle = '#4ade80';
-      tCtx.font = 'bold 20px Arial';
-      tCtx.fillText(`+$${result.revenue}`, 15, 30);
-      tCtx.fillStyle = '#60a5fa';
-      tCtx.fillText(`+${result.xpGained} XP`, 15, 55);
-
-      const textTex = new THREE.CanvasTexture(textCanvas);
-      const spriteMat = new THREE.SpriteMaterial({ map: textTex, transparent: true });
-      const sprite = new THREE.Sprite(spriteMat);
-      sprite.position.copy(registerWorldPos);
-      sprite.scale.set(1.5, 0.75, 1);
-      // add sprite to parent scene (need to store scene ref or access globally)
-      // For simplicity, we can do it directly in canvas effect or by exposing scene. 
-      // Instead, we just delete the item from array and trigger UI alert
+      const scene = sceneRef.current;
+      if (scene) scene.remove(item.mesh);
     }
 
     list.splice(index, 1);
@@ -988,338 +1040,607 @@ export default function Shop3D() {
 
     if (list.length === 0) {
       setIsNearRegister(false);
-      setActiveMessage('✅ Customer checkout complete!');
-      setTimeout(() => setActiveMessage(''), 2000);
+      setActiveMessage('✅ Customer checked out!');
     }
   };
 
-  return (
-    <div className="card" style={styles.cardContainer}>
-      {/* 3D Supermarket HUD Header */}
-      <div style={styles.hudHeader}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-          <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            🛒 3D Supermarket Simulator
-          </h3>
-          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            WASD to Walk, mouse click to interact. Carry boxes and click shelves to stock!
-          </span>
-        </div>
+  if (!shop) return null;
 
-        <div style={styles.controlsRow}>
-          {/* Theme selector */}
-          <div style={styles.themeSelector}>
+  return (
+    <div style={styles.simulatorWrapper}>
+      {/* 1. Splash Welcome Screen - "kirishda katta qilib zazudo deb kutib olsin" */}
+      {!hasStarted && (
+        <div style={styles.splashScreen}>
+          <div style={styles.splashCard}>
+            <div style={styles.splashLogo}>ZAZUDO</div>
+            <div style={styles.splashSubtitle}>3D SUPERMARKET SIMULATOR</div>
+            <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '2rem' }}>
+              Stock shelves, checkout customers, upgrade your attraction, and build a retail empire!
+            </p>
             <button 
-              onClick={() => setActiveTheme(activeTheme === 'cyberpunk' ? 'classic' : 'cyberpunk')}
-              className="btn btn-secondary" 
-              style={styles.hudBtn}
+              onClick={() => {
+                setHasStarted(true);
+                triggerSound('upgrade');
+              }}
+              style={styles.splashBtn}
             >
-              🎨 Theme: {activeTheme === 'cyberpunk' ? 'Cyberpunk' : 'Classic'}
+              START GAME
             </button>
           </div>
+        </div>
+      )}
 
-          {/* Camera View Mode Toggle */}
-          <button 
-            onClick={() => {
-              const nextMode = controlMode === 'orbit' ? 'firstperson' : 'orbit';
-              setControlMode(nextMode);
-              setActiveMessage(nextMode === 'firstperson' ? '🚶 First-Person (WASD): Click screen to lock mouse. Press ESC to unlock.' : '🎥 Tycoon View: Drag mouse to rotate, scroll to zoom.');
-            }}
-            className="btn btn-primary"
-            style={styles.hudBtn}
-          >
-            🎥 Mode: {controlMode === 'orbit' ? 'Tycoon Orbit' : 'First-Person (WASD)'}
-          </button>
+      {/* 2. Top HUD Bar (Exact Mobile Supermarket Sim Style) */}
+      <div style={styles.hudTopBar}>
+        {/* Settings gear */}
+        <button onClick={toggleSound} style={styles.gearBtn}>
+          {soundEnabled ? '🔊' : '🔇'}
+        </button>
 
-          {/* Quick Stock button */}
-          <button 
-            onClick={quickStockAll}
-            disabled={!shop.deliveryBoxes || shop.deliveryBoxes.length === 0}
-            className="btn btn-success"
-            style={{
-              ...styles.hudBtn,
-              ...((!shop.deliveryBoxes || shop.deliveryBoxes.length === 0) ? styles.hudBtnDisabled : {})
-            }}
-          >
-            📦 Quick Stock All
-          </button>
+        {/* Day Card */}
+        <div style={styles.dayCard}>
+          <div style={styles.dayHeader}>DAY</div>
+          <div style={styles.dayValue}>{currentDay}</div>
+        </div>
 
-          <button onClick={toggleSound} style={styles.iconBtn}>
-            {soundEnabled ? '🔊' : '🔇'}
-          </button>
+        {/* Clock card */}
+        <div style={styles.hudBadge}>
+          🕒 {currentTime}
+        </div>
+
+        {/* Energy bar */}
+        <div style={styles.energyBadge}>
+          <span style={{ fontSize: '1rem', marginRight: '4px' }}>⚡</span>
+          <div style={styles.energyBarWrapper}>
+            <div style={{ ...styles.energyBarFill, width: `${energy}%` }}></div>
+          </div>
+          <span style={{ fontSize: '0.75rem', marginLeft: '6px', fontWeight: 'bold' }}>{energy}</span>
+        </div>
+
+        {/* Cash indicator */}
+        <div style={styles.cashBadge}>
+          💵 ${shop.balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+        </div>
+
+        {/* Shop Level pill & XP progress */}
+        <div style={styles.lvlBadge}>
+          <span style={{ fontWeight: 'bold', color: '#fef08a' }}>LVL {shop.level}</span>
+          <div style={styles.xpBarWrapper}>
+            <div style={{ ...styles.xpBarFill, width: `${(shop.xp / shop.xpToNextLevel) * 100}%` }}></div>
+          </div>
         </div>
       </div>
 
-      {/* Main 3D Canvas Game World */}
+      {/* Title */}
+      <div style={styles.logoTitle}>ZAZUDO SUPERSTORE</div>
+
+      {/* Main 3D Screen Area */}
       <div ref={containerRef} style={styles.canvasContainer}>
-        <canvas ref={canvasRef} style={styles.canvasElement}></canvas>
+        {hasStarted && <canvas ref={canvasRef} style={styles.canvasElement}></canvas>}
 
-        {/* HUD Crosshair for First-Person Pointer lock target */}
-        {controlMode === 'firstperson' && stateRef.current.isPointerLocked && (
-          <div style={styles.crosshair}></div>
+        {/* Closed banner or checklist warning on the right side */}
+        {!isStoreOpen ? (
+          <div style={styles.urgentPanel}>
+            <div style={styles.avatarWrapper}>👩‍💼</div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '0.8rem' }}>URGENT</span>
+              <span style={{ fontSize: '0.8rem', color: '#e2e8f0', margin: '4px 0' }}>Your store is closed, open it to sell products</span>
+              <button onClick={toggleStoreOpen} style={styles.openBtn}>OPEN STORE</button>
+            </div>
+          </div>
+        ) : (
+          <div style={styles.urgentPanelOpen}>
+            <div style={styles.avatarWrapper}>👩‍💼</div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={{ color: '#22c55e', fontWeight: 'bold', fontSize: '0.8rem' }}>STORE OPEN</span>
+              <span style={{ fontSize: '0.75rem', color: '#e2e8f0' }}>Mijozlar kelishmoqda... Shoshiling!</span>
+              <button onClick={toggleStoreOpen} style={styles.closeBtn}>CLOSE STORE</button>
+            </div>
+          </div>
         )}
 
-        {/* Dynamic HUD Alerts */}
+        {/* Joystick indicator bottom left (for visual mobile style) */}
+        {controlMode === 'firstperson' && hasStarted && (
+          <div style={styles.virtualJoystick}>
+            <div style={styles.joystickKnob}></div>
+          </div>
+        )}
+
+        {/* Action Buttons Bottom Right */}
+        {hasStarted && (
+          <div style={styles.actionButtonsCol}>
+            {carryingBox && (
+              <>
+                <button onClick={handleManualStock} style={styles.actionBtnGreen}>
+                  🤲 STOCK ({carryingBox.quantity})
+                </button>
+                <button onClick={handleManualDropBox} style={styles.actionBtnRed}>
+                  📦⬇ DROP
+                </button>
+              </>
+            )}
+
+            <button 
+              onClick={() => setIsSprinting(!isSprinting)} 
+              style={isSprinting ? styles.actionBtnSprintActive : styles.actionBtnGold}
+            >
+              🏃 SPRINT
+            </button>
+
+            <button 
+              onClick={() => {
+                const next = controlMode === 'orbit' ? 'firstperson' : 'orbit';
+                setControlMode(next);
+                setActiveMessage(next === 'firstperson' ? 'Walking (WASD) - Click to look' : 'Orbit View');
+              }}
+              style={styles.actionBtnBlue}
+            >
+              🎥 VIEW
+            </button>
+          </div>
+        )}
+
+        {/* HUD Alerts */}
         {activeMessage && (
-          <div style={styles.hudAlert}>
-            {activeMessage}
-          </div>
+          <div style={styles.hudAlert}>{activeMessage}</div>
         )}
 
-        {/* Carrying Item HUD Overlay */}
-        {carryingBox && (
-          <div style={styles.carryingOverlay}>
-            <span style={{ fontSize: '0.8rem', color: '#fef08a' }}>HOLDING DELIVERY BOX</span>
-            <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>
-              📦 {carryingBox.name} ({carryingBox.quantity}x)
-            </div>
-            <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-              Walk to the shelf and press E (or click shelf) to stock items
-            </span>
-          </div>
-        )}
-
-        {/* Cashier Scan Mode Overlay */}
+        {/* Conveyor scan overlay */}
         {isNearRegister && scanningItems.length > 0 && (
-          <div style={styles.scannerOverlay} className="animate-fade-in">
-            <div style={styles.scannerHeader}>
-              <h4 style={{ margin: 0 }}>🛒 Cashier scanning terminal</h4>
-              <button 
-                onClick={() => setIsNearRegister(false)}
-                style={styles.scannerClose}
-              >
-                ✕ Close
-              </button>
+          <div style={styles.scanModal}>
+            <div style={styles.scanHeader}>
+              <h4 style={{ margin: 0 }}>Scan & Pack items</h4>
+              <button onClick={() => setIsNearRegister(false)} style={styles.scanClose}>✕</button>
             </div>
-            
-            <div style={styles.scannerItemList}>
+            <div style={styles.scanBody}>
               {scanningItems.map((item, idx) => (
-                <div key={idx} style={styles.scannerItemRow}>
-                  <span>{item.emoji} {item.name} ({item.quantity}x)</span>
-                  <button 
-                    onClick={() => scanConveyorItem(idx)}
-                    className="btn btn-success"
-                    style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem' }}
-                  >
-                    Scan & Bag
-                  </button>
+                <div key={idx} style={styles.scanRow}>
+                  <span>{item.emoji} {item.name} (x{item.quantity})</span>
+                  <button onClick={() => scanConveyorItem(idx)} style={styles.rowScanBtn}>SCAN</button>
                 </div>
               ))}
             </div>
-            
-            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center', marginTop: '0.8rem' }}>
-              Click "Scan & Bag" for each item to ring up customer
-            </div>
           </div>
         )}
       </div>
 
-      {/* 3D Simulation Stats Panel Footer */}
+      {/* HUD Info Footer */}
       <div style={styles.hudFooter}>
-        <div style={styles.footerStat}>
-          <span style={styles.statLabel}>Pending Deliveries</span>
-          <span style={styles.statValue} className="text-glow-blue">
-            {shop.deliveryBoxes ? shop.deliveryBoxes.length : 0} boxes
-          </span>
-        </div>
-        <div style={styles.footerStat}>
-          <span style={styles.statLabel}>Shop Volume multiplier</span>
-          <span style={styles.statValue} className="text-glow-purple">
-            x{(1.0 + (shop.upgrades.marketing - 1) * 0.15).toFixed(2)}
-          </span>
-        </div>
-        <div style={styles.footerStat}>
-          <span style={styles.statLabel}>Customer tips bonus</span>
-          <span style={styles.statValue} className="text-glow-green">
-            +{Math.round((UPGRADES.attraction.getMaxPriceMarkup(shop.upgrades.attraction) - 1.0) * 100)}%
-          </span>
-        </div>
-        <div style={styles.footerStat}>
-          <span style={styles.statLabel}>Warehouse occupancy</span>
-          <span style={styles.statValue}>
-            {Object.values(shop.inventory).reduce((acc, it) => acc + it.quantity, 0)} / {UPGRADES.storage.getCapacity(shop.upgrades.storage)}
-          </span>
-        </div>
+        <div>📦 Deliveries: <b>{(shop.deliveryBoxes || []).length} boxes</b></div>
+        <div>📣 Marketing: <b>Lv.{shop.upgrades.marketing}</b></div>
+        <div>✨ Attraction: <b>Lv.{shop.upgrades.attraction}</b></div>
+        <button onClick={quickStockAll} disabled={!(shop.deliveryBoxes && shop.deliveryBoxes.length > 0)} style={styles.quickStockBtn}>
+          ⚡ QUICK STOCK ALL
+        </button>
       </div>
     </div>
   );
 }
 
 const styles = {
-  cardContainer: {
-    padding: '1rem',
-    background: 'rgba(15, 23, 42, 0.45)',
-    border: '1px solid rgba(255, 255, 255, 0.08)',
-    borderRadius: 'var(--radius-md)',
-    boxShadow: '0 20px 50px rgba(0, 0, 0, 0.6)',
-    width: '100%',
-    overflow: 'hidden'
-  },
-  hudHeader: {
+  simulatorWrapper: {
     display: 'flex',
-    justifyContent: 'space-between',
+    flexDirection: 'column',
+    width: '100%',
+    fontFamily: '"Arial", sans-serif',
+    backgroundColor: '#0f172a',
+    borderRadius: '16px',
+    overflow: 'hidden',
+    border: '2px solid #1e293b',
+    boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.55)',
+    position: 'relative'
+  },
+  splashScreen: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
+    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+    zIndex: 100,
+    display: 'flex',
     alignItems: 'center',
-    borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
-    paddingBottom: '0.8rem',
-    marginBottom: '0.8rem',
+    justifyContent: 'center',
+    padding: '2rem'
+  },
+  splashCard: {
+    backgroundColor: '#1e293b',
+    border: '2px solid #3b82f6',
+    borderRadius: '24px',
+    padding: '3rem',
+    textAlign: 'center',
+    maxWidth: '480px',
+    boxShadow: '0 0 40px rgba(59, 130, 246, 0.35)'
+  },
+  splashLogo: {
+    fontSize: '4rem',
+    fontWeight: '900',
+    color: '#3b82f6',
+    letterSpacing: '4px',
+    textShadow: '0 0 15px rgba(59, 130, 246, 0.8)',
+    marginBottom: '0.2rem'
+  },
+  splashSubtitle: {
+    fontSize: '0.95rem',
+    fontWeight: 'bold',
+    color: '#60a5fa',
+    letterSpacing: '2px',
+    marginBottom: '1.5rem'
+  },
+  splashBtn: {
+    backgroundColor: '#ef4444',
+    color: '#ffffff',
+    border: 'none',
+    borderRadius: '12px',
+    padding: '0.85rem 2rem',
+    fontSize: '1.2rem',
+    fontWeight: 'bold',
+    cursor: 'pointer',
+    boxShadow: '0 5px 15px rgba(239, 68, 68, 0.4)',
+    transition: 'transform 0.1s'
+  },
+  hudTopBar: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '0.75rem 1.25rem',
+    backgroundColor: '#1e293b',
+    borderBottom: '2px solid #334155',
     flexWrap: 'wrap',
     gap: '0.8rem'
   },
-  controlsRow: {
-    display: 'flex',
-    gap: '0.6rem',
-    alignItems: 'center'
-  },
-  hudBtn: {
-    padding: '0.45rem 1rem',
-    fontSize: '0.85rem'
-  },
-  hudBtnDisabled: {
-    opacity: 0.4,
-    cursor: 'not-allowed',
-    background: 'var(--bg-card)'
-  },
-  iconBtn: {
-    background: 'rgba(255, 255, 255, 0.03)',
-    border: '1px solid rgba(255, 255, 255, 0.08)',
-    borderRadius: 'var(--radius-sm)',
-    width: '34px',
-    height: '34px',
+  gearBtn: {
+    width: '38px',
+    height: '38px',
+    borderRadius: '8px',
+    border: 'none',
+    backgroundColor: '#334155',
+    fontSize: '1.1rem',
     cursor: 'pointer',
     color: '#fff',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center'
   },
+  dayCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    backgroundColor: '#b91c1c',
+    borderRadius: '8px',
+    width: '56px',
+    overflow: 'hidden',
+    border: '1.5px solid #ef4444'
+  },
+  dayHeader: {
+    fontSize: '0.65rem',
+    color: '#fca5a5',
+    fontWeight: 'bold',
+    padding: '2px 0'
+  },
+  dayValue: {
+    fontSize: '1.1rem',
+    fontWeight: 'bold',
+    color: '#ffffff',
+    backgroundColor: '#7f1d1d',
+    width: '100%',
+    textAlign: 'center',
+    padding: '2px 0'
+  },
+  hudBadge: {
+    backgroundColor: '#0f172a',
+    border: '1.5px solid #334155',
+    color: '#f8fafc',
+    borderRadius: '8px',
+    padding: '0.4rem 0.8rem',
+    fontSize: '0.9rem',
+    fontWeight: 'bold'
+  },
+  energyBadge: {
+    display: 'flex',
+    alignItems: 'center',
+    backgroundColor: '#0f172a',
+    border: '1.5px solid #eab308',
+    color: '#fff',
+    borderRadius: '8px',
+    padding: '0.4rem 0.8rem'
+  },
+  energyBarWrapper: {
+    width: '60px',
+    height: '10px',
+    backgroundColor: '#1e293b',
+    borderRadius: '4px',
+    overflow: 'hidden'
+  },
+  energyBarFill: {
+    height: '100%',
+    backgroundColor: '#eab308'
+  },
+  cashBadge: {
+    backgroundColor: '#166534',
+    border: '1.5px solid #22c55e',
+    color: '#4ade80',
+    borderRadius: '8px',
+    padding: '0.4rem 1rem',
+    fontSize: '1.05rem',
+    fontWeight: 'bold',
+    textShadow: '0 0 4px rgba(34, 197, 94, 0.4)'
+  },
+  lvlBadge: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+    backgroundColor: '#7c3aed',
+    border: '1.5px solid #a78bfa',
+    color: '#fff',
+    borderRadius: '8px',
+    padding: '0.4rem 0.8rem',
+    fontSize: '0.85rem'
+  },
+  xpBarWrapper: {
+    width: '50px',
+    height: '8px',
+    backgroundColor: '#4c1d95',
+    borderRadius: '4px',
+    overflow: 'hidden'
+  },
+  xpBarFill: {
+    height: '100%',
+    backgroundColor: '#a78bfa'
+  },
+  logoTitle: {
+    backgroundColor: '#111827',
+    color: '#ef4444',
+    textAlign: 'center',
+    fontSize: '1.1rem',
+    fontWeight: '950',
+    letterSpacing: '2px',
+    padding: '0.35rem 0',
+    borderBottom: '2.5px solid #ef4444',
+    textTransform: 'uppercase'
+  },
   canvasContainer: {
     position: 'relative',
     height: '460px',
     width: '100%',
-    borderRadius: 'var(--radius-sm)',
-    overflow: 'hidden',
-    border: '2px solid rgba(255,255,255,0.06)',
-    boxShadow: 'inset 0 0 30px rgba(0,0,0,0.9)'
+    backgroundColor: '#bae6fd',
+    cursor: 'crosshair'
   },
   canvasElement: {
     width: '100%',
     height: '100%',
     display: 'block'
   },
-  crosshair: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    width: '10px',
-    height: '10px',
-    borderRadius: '50%',
-    border: '2px solid rgba(255, 255, 255, 0.7)',
-    transform: 'translate(-50%, -50%)',
-    pointerEvents: 'none'
-  },
-  hudAlert: {
+  urgentPanel: {
     position: 'absolute',
     top: '15px',
-    left: '50%',
-    transform: 'translateX(-50%)',
-    backgroundColor: 'rgba(9, 13, 22, 0.85)',
-    color: '#fff',
-    padding: '0.5rem 1.2rem',
-    borderRadius: 'var(--radius-sm)',
-    fontSize: '0.85rem',
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    pointerEvents: 'none',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
+    right: '15px',
+    width: '210px',
+    backgroundColor: 'rgba(15, 23, 42, 0.92)',
+    border: '2px solid #ef4444',
+    borderRadius: '12px',
+    padding: '0.75rem',
+    display: 'flex',
+    gap: '0.5rem',
+    alignItems: 'flex-start',
+    boxShadow: '0 10px 15px rgba(0,0,0,0.5)',
+    zIndex: 10
   },
-  carryingOverlay: {
+  urgentPanelOpen: {
+    position: 'absolute',
+    top: '15px',
+    right: '15px',
+    width: '210px',
+    backgroundColor: 'rgba(15, 23, 42, 0.92)',
+    border: '2px solid #22c55e',
+    borderRadius: '12px',
+    padding: '0.75rem',
+    display: 'flex',
+    gap: '0.5rem',
+    alignItems: 'flex-start',
+    boxShadow: '0 10px 15px rgba(0,0,0,0.5)',
+    zIndex: 10
+  },
+  avatarWrapper: {
+    fontSize: '2rem',
+    backgroundColor: '#334155',
+    borderRadius: '50%',
+    width: '40px',
+    height: '40px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  openBtn: {
+    backgroundColor: '#22c55e',
+    color: '#fff',
+    border: 'none',
+    borderRadius: '6px',
+    padding: '4px 10px',
+    fontSize: '0.75rem',
+    fontWeight: 'bold',
+    cursor: 'pointer',
+    marginTop: '6px'
+  },
+  closeBtn: {
+    backgroundColor: '#ef4444',
+    color: '#fff',
+    border: 'none',
+    borderRadius: '6px',
+    padding: '4px 10px',
+    fontSize: '0.75rem',
+    fontWeight: 'bold',
+    cursor: 'pointer',
+    marginTop: '6px'
+  },
+  virtualJoystick: {
+    position: 'absolute',
+    bottom: '25px',
+    left: '25px',
+    width: '80px',
+    height: '80px',
+    borderRadius: '50%',
+    backgroundColor: 'rgba(148, 163, 184, 0.3)',
+    border: '2px solid rgba(255,255,255,0.4)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    pointerEvents: 'none'
+  },
+  joystickKnob: {
+    width: '32px',
+    height: '32px',
+    borderRadius: '50%',
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
+  },
+  actionButtonsCol: {
     position: 'absolute',
     bottom: '20px',
-    left: '20px',
-    backgroundColor: 'rgba(9, 13, 22, 0.9)',
-    border: '2px solid #eab308',
-    padding: '0.8rem 1.2rem',
-    borderRadius: 'var(--radius-sm)',
-    color: '#fff',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '0.2rem',
-    boxShadow: '0 10px 25px rgba(0, 0, 0, 0.7)'
-  },
-  scannerOverlay: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: 'translate(-50%, -50%)',
-    width: '360px',
-    backgroundColor: 'rgba(9, 13, 22, 0.95)',
-    border: '2px solid var(--accent-blue)',
-    borderRadius: 'var(--radius-md)',
-    boxShadow: '0 20px 60px rgba(0,0,0,0.8), 0 0 15px var(--accent-blue-glow)',
-    padding: '1.25rem',
-    color: '#fff',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '0.8rem'
-  },
-  scannerHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    borderBottom: '1px solid rgba(255,255,255,0.1)',
-    paddingBottom: '0.5rem'
-  },
-  scannerClose: {
-    background: 'none',
-    border: 'none',
-    color: 'var(--text-muted)',
-    cursor: 'pointer',
-    fontSize: '0.85rem'
-  },
-  scannerItemList: {
+    right: '20px',
     display: 'flex',
     flexDirection: 'column',
     gap: '0.6rem',
-    maxHeight: '220px',
-    overflowY: 'auto',
-    padding: '0.2rem'
+    zIndex: 10
   },
-  scannerItemRow: {
+  actionBtnGreen: {
+    backgroundColor: '#22c55e',
+    color: '#fff',
+    border: '2px solid #4ade80',
+    borderRadius: '10px',
+    padding: '0.6rem 1.2rem',
+    fontWeight: 'bold',
+    fontSize: '0.85rem',
+    cursor: 'pointer',
+    boxShadow: '0 4px 6px rgba(0,0,0,0.3)'
+  },
+  actionBtnRed: {
+    backgroundColor: '#ef4444',
+    color: '#fff',
+    border: '2px solid #fca5a5',
+    borderRadius: '10px',
+    padding: '0.6rem 1.2rem',
+    fontWeight: 'bold',
+    fontSize: '0.85rem',
+    cursor: 'pointer',
+    boxShadow: '0 4px 6px rgba(0,0,0,0.3)'
+  },
+  actionBtnGold: {
+    backgroundColor: '#d97706',
+    color: '#fff',
+    border: '2px solid #fbbf24',
+    borderRadius: '10px',
+    padding: '0.6rem 1.2rem',
+    fontWeight: 'bold',
+    fontSize: '0.85rem',
+    cursor: 'pointer',
+    boxShadow: '0 4px 6px rgba(0,0,0,0.3)'
+  },
+  actionBtnSprintActive: {
+    backgroundColor: '#fbbf24',
+    color: '#0f172a',
+    border: '2px solid #ffffff',
+    borderRadius: '10px',
+    padding: '0.6rem 1.2rem',
+    fontWeight: 'bold',
+    fontSize: '0.85rem',
+    cursor: 'pointer',
+    boxShadow: '0 4px 10px rgba(251, 191, 36, 0.5)'
+  },
+  actionBtnBlue: {
+    backgroundColor: '#2563eb',
+    color: '#fff',
+    border: '2px solid #60a5fa',
+    borderRadius: '10px',
+    padding: '0.6rem 1.2rem',
+    fontWeight: 'bold',
+    fontSize: '0.85rem',
+    cursor: 'pointer',
+    boxShadow: '0 4px 6px rgba(0,0,0,0.3)'
+  },
+  hudAlert: {
+    position: 'absolute',
+    top: '20px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    backgroundColor: 'rgba(15, 23, 42, 0.9)',
+    color: '#fff',
+    padding: '0.4rem 1.2rem',
+    borderRadius: '8px',
+    fontSize: '0.8rem',
+    border: '1.5px solid #334155',
+    pointerEvents: 'none'
+  },
+  scanModal: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: '320px',
+    backgroundColor: '#1e293b',
+    border: '2.5px solid #2563eb',
+    borderRadius: '16px',
+    padding: '1.25rem',
+    color: '#fff',
+    boxShadow: '0 20px 25px -5px rgba(0,0,0,0.5)',
+    zIndex: 20
+  },
+  scanHeader: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: '0.5rem',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderRadius: 'var(--radius-sm)',
-    border: '1px solid rgba(255,255,255,0.04)'
+    borderBottom: '1.5px solid #334155',
+    paddingBottom: '0.5rem',
+    marginBottom: '0.8rem'
   },
-  hudFooter: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(4, 1fr)',
-    gap: '1rem',
-    background: 'rgba(0,0,0,0.25)',
-    padding: '0.75rem 1rem',
-    borderRadius: 'var(--radius-sm)',
-    border: '1px solid rgba(255,255,255,0.04)',
-    marginTop: '0.8rem'
+  scanClose: {
+    background: 'none',
+    border: 'none',
+    color: '#94a3b8',
+    fontSize: '1.1rem',
+    cursor: 'pointer'
   },
-  footerStat: {
+  scanBody: {
     display: 'flex',
     flexDirection: 'column',
+    gap: '0.6rem'
+  },
+  scanRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    textAlign: 'center',
-    gap: '0.15rem'
+    backgroundColor: '#0f172a',
+    padding: '0.5rem 0.75rem',
+    borderRadius: '8px'
   },
-  statLabel: {
-    fontSize: '0.7rem',
-    color: 'var(--text-muted)',
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em'
-  },
-  statValue: {
-    fontSize: '0.9rem',
+  rowScanBtn: {
+    backgroundColor: '#22c55e',
+    color: '#fff',
+    border: 'none',
+    borderRadius: '6px',
+    padding: '4px 12px',
     fontWeight: 'bold',
-    color: '#fff'
+    cursor: 'pointer'
   },
-  themeSelector: {
-    display: 'flex'
+  hudFooter: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '0.75rem 1.25rem',
+    backgroundColor: '#1e293b',
+    borderTop: '2px solid #334155',
+    color: '#cbd5e1',
+    fontSize: '0.85rem',
+    flexWrap: 'wrap',
+    gap: '0.5rem'
+  },
+  quickStockBtn: {
+    backgroundColor: '#22c55e',
+    color: '#fff',
+    border: 'none',
+    borderRadius: '6px',
+    padding: '6px 14px',
+    fontWeight: 'bold',
+    cursor: 'pointer'
   }
 };
